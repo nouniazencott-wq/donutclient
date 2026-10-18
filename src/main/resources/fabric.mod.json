@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "id": "donutclient",
+  "version": "${version}",
+  "name": "Donut Client",
+  "description": "A modular client-side enhancement mod: HUD modules, keybinds, zoom.",
+  "authors": ["You"],
+  "contact": {
+    "homepage": "https://example.com/",
+    "sources": "https://github.com/you/donutclient"
+  },
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "main": ["com.example.donutclient.DonutClient"],
+    "client": ["com.example.donutclient.DonutClientClient"]
+  },
+  "mixins": [
+    {
+      "config": "donutclient.client.mixins.json",
+      "environment": "client"
+    }
+  ],
+  "depends": {
+    "fabricloader": ">=0.19.5",
+    "minecraft": "~26.2",
+    "java": ">=25",
+    "fabric-api": "*"
+  }
+}
