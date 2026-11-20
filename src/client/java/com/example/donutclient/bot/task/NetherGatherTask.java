@@ -4,7 +4,9 @@ import com.example.donutclient.bot.Bot;
 import com.example.donutclient.bot.Locate;
 import com.example.donutclient.bot.path.Goal;
 import com.example.donutclient.bot.path.Nav;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.entity.monster.Blaze;
@@ -47,6 +49,18 @@ public final class NetherGatherTask extends Task {
     private int searchIdx;
     private int ticks;
     private int travelFails;
+    /** Number of locate queries that found nothing. */
+    private int locateFails;
+    /** True while travelling to a guessed position because the last locate query found nothing. */
+    private boolean blind;
+    /** Spawner the current camp was set up at, or null for a camp without a spawner. */
+    private BlockPos campSpawner;
+    /** {@link #have()} when the current camp started. */
+    private int campStartHave;
+    /** Spawners whose camp ended without enough rods (unreachable, not a blaze spawner, ...). */
+    private final Set<BlockPos> badSpawners = new HashSet<>();
+    /** Bot tick of the last spawner scan. */
+    private long lastScan = -1000L;
 
     public NetherGatherTask(Bot bot, Kind kind, int want) {
         super(bot);
@@ -61,6 +75,12 @@ public final class NetherGatherTask extends Task {
     @Override
     public void onInterrupted() {
         super.onInterrupted();
+        // the camp is ticked directly (not as a child), so it has to be told here: it resets the "sheltered"
+        // reflex flag and the pathfinder's cover area, which would otherwise stay set for good
+        if (camp != null) {
+            camp.onInterrupted();
+        }
+        blind = false;
         state = S.LOCATE;
         query = null;
         camp = null;
@@ -90,11 +110,16 @@ public final class NetherGatherTask extends Task {
                 place = query.result();
                 query = null;
                 if (place == null) {
-                    // Nothing found: just head 300 blocks east and look there.
-                    bot.say("Could not locate a " + name + ".");
-                    place = bot.feet().offset(300, 0, 0);
+                    // Nothing found: move 300 blocks in a direction that changes with every failure and ask
+                    // again from there (instead of pretending the guessed spot is the real thing).
+                    double angle = locateFails++ * 2.1;
+                    place = bot.feet().offset((int) (Math.cos(angle) * 300.0), 0, (int) (Math.sin(angle) * 300.0));
+                    blind = true;
+                    bot.say("Could not locate a " + name + " from here, looking further away.");
+                } else {
+                    blind = false;
+                    bot.say("Heading to the " + name + " at " + place.getX() + ", " + place.getZ());
                 }
-                bot.say("Heading to the " + name + " at " + place.getX() + ", " + place.getZ());
                 goal = Goal.xz(place.getX(), place.getZ(), 16.0);
                 state = S.TRAVEL;
             }
@@ -104,7 +129,9 @@ public final class NetherGatherTask extends Task {
                 }
                 if (travel.tick()) {
                     travel = null;
-                    state = S.SEARCH;
+                    // after a blind leg there is nothing to search here: run the locate query again
+                    state = blind ? S.LOCATE : S.SEARCH;
+                    blind = false;
                     goal = null;
                 }
             }
@@ -114,11 +141,18 @@ public final class NetherGatherTask extends Task {
                     return false;
                 }
                 bot.setStatus("searching the fortress for a blaze spawner");
-                List<BlockPos> spawners = bot.scan.find(state -> state.is(Blocks.SPAWNER), 8, 4);
-                if (!spawners.isEmpty()) {
-                    bot.say("Found a blaze spawner at " + spawners.get(0).toShortString());
-                    startHunt(spawners.get(0));
-                    return false;
+                // Scanning 17x17 chunks is too expensive to do every tick: once a second is plenty.
+                if (bot.tick - lastScan >= 20L) {
+                    lastScan = bot.tick;
+                    List<BlockPos> spawners = bot.scan.find(state -> state.is(Blocks.SPAWNER), 8, 8);
+                    for (BlockPos spawner : spawners) {
+                        if (badSpawners.contains(spawner)) {
+                            continue;
+                        }
+                        bot.say("Found a blaze spawner at " + spawner.toShortString());
+                        startHunt(spawner);
+                        return false;
+                    }
                 }
                 if (goal == null) {
                     // Visit points on growing rings (8 per ring, 56 blocks apart) around the fortress position.
@@ -133,7 +167,12 @@ public final class NetherGatherTask extends Task {
                     goal = null;
                 }
                 if (searchIdx > 24) {
-                    // No spawner anywhere: fight whatever blazes roam the fortress.
+                    // No spawner anywhere: fight whatever blazes roam the fortress. Start the ring search over
+                    // afterwards (and give the spawners that failed before another chance); without this every
+                    // later pass came straight back here and camped on the same spot for ever.
+                    searchIdx = 0;
+                    badSpawners.clear();
+                    goal = null;
                     startHunt(place);
                 }
             }
@@ -144,6 +183,11 @@ public final class NetherGatherTask extends Task {
                     }
                     camps++;
                     goal = null;
+                    if (campSpawner != null && have() <= campStartHave) {
+                        // this spawner gave nothing at all: look for another one before coming back to it
+                        // (one that did give rods is simply camped at again)
+                        badSpawners.add(campSpawner);
+                    }
                     if (kind == Kind.PEARLS) {
                         // This spot dried up: move the camp 40 blocks in a new direction.
                         double angle = camps * 2.1;
@@ -167,8 +211,13 @@ public final class NetherGatherTask extends Task {
 
     /** Starts the camp-and-fight phase at {@code pos} (a spawner for blazes, otherwise a general area). */
     private void startHunt(BlockPos pos) {
+        campSpawner = null;
+        campStartHave = have();
         if (kind == Kind.BLAZE_RODS) {
             boolean spawner = bot.level().getBlockState(pos).is(Blocks.SPAWNER);
+            if (spawner) {
+                campSpawner = pos;
+            }
             camp = new CampTask(bot, CampTask.Mode.BOX, "blazes", spawner ? pos.below(2) : bot.feet(),
                     entity -> entity instanceof Blaze, stack -> stack.is(Items.BLAZE_ROD), () -> have() >= want);
         } else {

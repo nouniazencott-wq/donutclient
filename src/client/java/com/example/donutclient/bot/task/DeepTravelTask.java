@@ -24,6 +24,8 @@ public final class DeepTravelTask extends Task {
     private int phase;
     private int fails;
     private int ticks;
+    /** Smallest distance to the target seen while tunnelling; used to forgive old failures once we get closer. */
+    private int bestDist = Integer.MAX_VALUE;
     /** Set when the task gave up (too many failed paths or timed out). */
     public boolean failed;
 
@@ -73,6 +75,8 @@ public final class DeepTravelTask extends Task {
             return false;
         }
         if (phase == -1) {
+            // the detour goal is dropped when the task is interrupted; nav.goTo(null) would throw
+            if (goal == null) { phase = 0; return false; }
             bot.setStatus("looking for a way down");
             Nav.Status st = bot.nav.goTo(goal);
             if (st != Nav.Status.RUNNING) { phase = 0; goal = null; }
@@ -80,6 +84,9 @@ public final class DeepTravelTask extends Task {
         }
         bot.setStatus("tunnelling (" + dist / 25 * 25 + " blocks to go)");
         if (goal == null) { goal = Goal.xz(tx, tz, radius); phase = 1; }
+        // real progress (16 blocks closer than ever before) wipes the failure count, so a long trip is not
+        // abandoned because of ten unrelated obstacles spread along the way
+        if (dist < bestDist - 16) { bestDist = dist; fails = 0; }
         Nav.Status st = bot.nav.goTo(goal);
         if (st == Nav.Status.DONE) {
             // finishing a detour only resumes the main tunnel

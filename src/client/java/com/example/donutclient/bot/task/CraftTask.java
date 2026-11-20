@@ -51,6 +51,14 @@ public final class CraftTask extends Task {
     /** True when the task ended without producing everything that was asked for. */
     public boolean failed;
     private int totalTicks;
+    /** Clicks on a result slot that would not give its item up (inventory full). */
+    private int takeTries;
+    /** Inventory count of the current step's item when the grid was last filled. */
+    private int countAtLayout;
+    /** Ticks spent trying to put our crafting table down. */
+    private int placeTicks;
+    /** Clicks spent on moving leftovers out of the 2x2 inventory grid during cleanup. */
+    private int cleanupClicks;
 
     public CraftTask(Bot bot) {
         super(bot);
@@ -160,6 +168,10 @@ public final class CraftTask extends Task {
         stepTarget = -1;
         placed = false;
         waitingResult = false;
+        // Never leave a crafting screen open behind us; the server puts grid and cursor items back.
+        if (bot.player() != null && !bot.inv.menuIsInventory()) {
+            bot.player().closeContainer();
+        }
     }
 
     @Override
@@ -180,6 +192,10 @@ public final class CraftTask extends Task {
             finishing = true;
         }
         if (totalTicks > 2400) {
+            // Do not walk off with the crafting screen still open (closing it returns grid and cursor items).
+            if (!bot.inv.menuIsInventory()) {
+                p.closeContainer();
+            }
             return true;
         }
         if (finishing) {
@@ -223,6 +239,14 @@ public final class CraftTask extends Task {
         if (waitingResult) {
             ItemStack res = menu.getSlot(0).getItem();
             if (!res.isEmpty() && step.ing.pred.test(res)) {
+                // One shift-click normally takes everything; if the result still sits there after many, the
+                // inventory has no room for it - stop instead of clicking until the timeout.
+                if (++takeTries > 10) {
+                    bot.dbg("craft: no room for " + step.ing);
+                    failed = true;
+                    finishing = true;
+                    return false;
+                }
                 click(0, 0, ContainerInput.QUICK_MOVE);
                 wait = 2;
                 return false;
@@ -240,6 +264,9 @@ public final class CraftTask extends Task {
                     stepIdx++;
                     stepTarget = -1;
                     failures = 0;
+                } else if (bot.inv.count(step.ing.pred) > countAtLayout) {
+                    // A partial batch came out: that is progress, not a failure.
+                    failures = 0;
                 } else if (++failures > 4) {
                     failed = true;
                     finishing = true;
@@ -250,7 +277,7 @@ public final class CraftTask extends Task {
         }
         int remaining = stepTarget - bot.inv.count(step.ing.pred);
         // Number of recipe runs to lay out at once (items per grid cell).
-        int n = Math.min((remaining + r.out() - 1) / r.out(), 64);
+        int n = Math.min((remaining + r.out() - 1) / r.out(), stackLimit(r));
         if (n <= 0) {
             stepIdx++;
             stepTarget = -1;
@@ -289,9 +316,10 @@ public final class CraftTask extends Task {
                 }
                 click(src, 0, ContainerInput.PICKUP);
                 for (int cell : e.getValue()) {
-                    while (!menu.getCarried().isEmpty() && menu.getSlot(cell).getItem().getCount() < n
+                    // (bounded: a click that places nothing must not turn this into an endless loop)
+                    for (int k = 0; k < 64 && !menu.getCarried().isEmpty() && menu.getSlot(cell).getItem().getCount() < n
                             && (menu.getSlot(cell).getItem().isEmpty()
-                                    || ItemStack.isSameItemSameComponents(menu.getSlot(cell).getItem(), menu.getCarried()))) {
+                                    || ItemStack.isSameItemSameComponents(menu.getSlot(cell).getItem(), menu.getCarried())); k++) {
                         click(cell, 1, ContainerInput.PICKUP);
                     }
                 }
@@ -301,9 +329,28 @@ public final class CraftTask extends Task {
             }
         }
         waitingResult = true;
+        takeTries = 0;
+        countAtLayout = bot.inv.count(step.ing.pred);
         openWait = 0;
         wait = 3;
         return false;
+    }
+
+    /**
+     * The most items one grid cell can take for this recipe: the smallest stack size among the ingredients carried
+     * (ender pearls only stack to 16). Asking a cell for more could never be satisfied.
+     */
+    private int stackLimit(Ing.Recipe r) {
+        int limit = 64;
+        for (Ing in : r.key().values()) {
+            for (int i = 0; i < 36; i++) {
+                ItemStack st = bot.inv.get(i);
+                if (!st.isEmpty() && in.pred.test(st)) {
+                    limit = Math.min(limit, st.getMaxStackSize());
+                }
+            }
+        }
+        return Math.max(1, limit);
     }
 
     /** True when all {@code width x width} crafting grid slots are empty. */
@@ -316,8 +363,20 @@ public final class CraftTask extends Task {
         return true;
     }
 
-    /** Gets rid of the stack on the cursor: into the first empty inventory slot, else thrown out of the window. */
+    /**
+     * Gets rid of the stack on the cursor: onto an inventory stack of the same item that has room (which may take
+     * several calls), else into the first empty inventory slot, and only as a last resort thrown out of the window.
+     */
     private void dropCarried(AbstractContainerMenu menu) {
+        ItemStack carried = menu.getCarried();
+        for (Slot s : menu.slots) {
+            ItemStack st = s.getItem();
+            if (s.container == bot.player().getInventory() && s.getContainerSlot() < 36 && !st.isEmpty()
+                    && st.getCount() < st.getMaxStackSize() && ItemStack.isSameItemSameComponents(st, carried)) {
+                click(s.index, 0, ContainerInput.PICKUP);
+                return;
+            }
+        }
         for (Slot s : menu.slots) {
             if (s.container == bot.player().getInventory() && s.getContainerSlot() < 36 && s.getItem().isEmpty()) {
                 click(s.index, 0, ContainerInput.PICKUP);
@@ -389,6 +448,11 @@ public final class CraftTask extends Task {
                 }
                 return false;
             }
+            // Cannot get the table down here (no usable neighbour, something in the way): fail after 10 seconds
+            // rather than clicking away until the task times out.
+            if (++placeTicks > 200) {
+                return false;
+            }
             if (bot.inv.hold(Items.CRAFTING_TABLE)) {
                 if (bot.act.placeHeld(spot, false)) {
                     tablePos = spot;
@@ -421,6 +485,15 @@ public final class CraftTask extends Task {
             }
             p.closeContainer();
             return false;
+        }
+        // Leftovers in the 2x2 inventory grid (a craft that was cut short) are invisible to the rest of the bot:
+        // shift-click them back into the inventory, one per tick, giving up after a few clicks if it is full.
+        for (int i = 1; i <= 4 && cleanupClicks < 8; i++) {
+            if (!p.inventoryMenu.getSlot(i).getItem().isEmpty()) {
+                cleanupClicks++;
+                click(i, 0, ContainerInput.QUICK_MOVE);
+                return false;
+            }
         }
         if (ownTable && tablePos != null) {
             if (pickup[0] == null) {

@@ -14,6 +14,7 @@ import net.minecraft.tags.FluidTags;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.NetherPortalBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.material.FluidState;
 import net.minecraft.world.phys.Vec3;
@@ -66,6 +67,29 @@ public final class PortalTask extends Task {
     private long lastScan = -1000L;
     private FetchFluidTask lavaFetch;
     private int knownTries;
+    /** Ticks spent on the current exploration leg, and the number of legs walked so far. */
+    private int exploreTicks;
+    private int legs;
+    /** Set when the task ends early because an item is missing; the plan then gets a chance to make that item. */
+    private boolean giveUp;
+    /** Number of times lighting timed out at this site. */
+    private int lightCycles;
+    /** Ticks spent pushing into the portal without being taken through. */
+    private int pushTicks;
+    /** While non-null the bot first walks to this block on an open side of the portal, see {@link #enter()}. */
+    private Goal approach;
+    private int approachTicks;
+    private int approachSide;
+    private int resumeTries;
+
+    /**
+     * Origin (ox, g, oz) of a frame that was left unfinished because an item was missing, and the bot tick at which
+     * that happened. Static because the plan creates a fresh PortalTask after it has made the item; that task picks
+     * the frame up again instead of starting a new one.
+     */
+    private static BlockPos resumeSite;
+    private static long resumeTick;
+    private static long lastNeedSay = -100000L;
 
     public PortalTask(Bot bot) {
         super(bot);
@@ -76,6 +100,8 @@ public final class PortalTask extends Task {
         stateTicks = 0;
         goal = null;
         workTarget = null;
+        approach = null;
+        pushTicks = 0;
         bot.nav.reset();
     }
 
@@ -111,7 +137,33 @@ public final class PortalTask extends Task {
             case LIGHT -> light();
             case ENTER -> enter();
         }
+        if (giveUp) {
+            bot.nav.reset();
+            return true;
+        }
         return false;
+    }
+
+    /** Gives up on the current pool / site and looks for another one. */
+    private void abandonSite() {
+        if (lake != null) badLakes.add(lake);   // lake is null when a frame from an earlier task was resumed
+        lightCycles = 0;
+        go(S.FIND_LAVA);
+    }
+
+    /**
+     * Ends the task because {@code what} is missing and cannot be obtained here. The plan re-evaluates its stages
+     * when a task finishes, so it can mine / craft the item and then start a new PortalTask, which continues with
+     * the frame remembered in {@link #resumeSite}. Prevents waiting or blacklisting pools forever.
+     */
+    private void needItem(String what) {
+        resumeSite = new BlockPos(ox, g, oz);
+        resumeTick = bot.tick;
+        if (bot.tick - lastNeedSay > 1200L) {
+            lastNeedSay = bot.tick;
+            bot.say("I need " + what + " to finish the portal - going to get one.");
+        }
+        giveUp = true;
     }
 
     // ------------------------------------------------------------------ existing portal
@@ -123,6 +175,38 @@ public final class PortalTask extends Task {
             portalBlock = lowest(portals.get(0));
             go(S.ENTER);
             return;
+        }
+        // a frame an earlier PortalTask had to leave unfinished (missing bucket / flint and steel): carry on there
+        BlockPos site = resumeSite;
+        if (site != null) {
+            double d = bot.feet().distSqr(site);
+            if (bot.tick < resumeTick || bot.tick - resumeTick > 36000L || d > 160000.0 || resumeTries >= 3) {
+                // too old, too far away (or another world), or unreachable: forget it
+                resumeSite = null;
+                goal = null;
+            } else if (d > 576.0) {
+                bot.setStatus("returning to my unfinished portal");
+                if (goal == null) goal = Goal.near(site, 8.0);
+                Nav.Status st = bot.nav.goTo(goal);
+                if (st == Nav.Status.FAILED) { resumeTries++; goal = null; }
+                return;
+            } else {
+                resumeSite = null;
+                ox = site.getX(); g = site.getY(); oz = site.getZ();
+                layout();
+                int made = 0;
+                for (Cast c : casts) if (bs(c.target).is(Blocks.OBSIDIAN)) made++;
+                if (made > 0) {
+                    // CLEAN re-checks every frame block and goes back to BUILD / on to LIGHT as needed
+                    castIdx = 0;
+                    castState = 0;
+                    castFails = 0;
+                    go(S.CLEAN);
+                    return;
+                }
+                casts = null;   // nothing of the frame is there: start from scratch
+                goal = null;
+            }
         }
         // nothing loaded: head for the portal we used before if it is more than 48 blocks away
         BlockPos known = bot.memory.overworldPortal;
@@ -147,6 +231,8 @@ public final class PortalTask extends Task {
     /** Rescans every 5 s for a big enough surface lava pool; wanders in 96-block legs until one is found. */
     private void findLava() {
         bot.setStatus("looking for a lava pool");
+        // the frame needs 10 lava sources; after 5 minutes of searching settle for a smaller pool
+        int minPool = stateTicks > 6000 ? 12 : 18;
         if (bot.tick - lastScan > 100L) {
             lastScan = bot.tick;
             List<FetchFluidTask.Spot> spots = FetchFluidTask.findSpots(bot, FluidTags.LAVA, null, 0, 300);
@@ -157,7 +243,7 @@ public final class PortalTask extends Task {
                 boolean bad = false;
                 for (BlockPos b : badLakes) if (b.distSqr(sp.source()) < 576.0) bad = true;   // within 24 blocks
                 if (bad) continue;
-                if (poolSize(sp.source()) >= 18) {
+                if (poolSize(sp.source()) >= minPool) {
                     lake = sp.source();
                     go(S.CHOOSE_SITE);
                     return;
@@ -169,9 +255,19 @@ public final class PortalTask extends Task {
             // initial heading is derived from the position so it is stable across restarts
             if (heading < 0.0) heading = Math.floorMod(f.getX() * 7 + f.getZ() * 3, 8) * Math.PI / 4.0;
             explore = Goal.xz(f.getX() + (int) (Math.cos(heading) * 96.0), f.getZ() + (int) (Math.sin(heading) * 96.0), 8.0);
+            exploreTicks = 0;
         }
         Nav.Status st = bot.nav.goTo(explore);
         if (st == Nav.Status.FAILED) heading += Math.PI / 2 + 0.4;
+        // every 5th leg bend the route by ~60 degrees so the search does not follow one line (across an ocean,
+        // a desert, ...) for ever
+        else if (st == Nav.Status.DONE && ++legs % 5 == 0) heading += 1.05;
+        // a leg that takes more than 2.5 minutes (swimming, digging) is not worth finishing: turn away
+        else if (st == Nav.Status.RUNNING && ++exploreTicks > 3000) {
+            heading += Math.PI / 2 + 0.4;
+            explore = null;
+            bot.nav.reset();
+        }
         if (st != Nav.Status.RUNNING) explore = null;
     }
 
@@ -241,12 +337,21 @@ public final class PortalTask extends Task {
             }
         }
         if (best == Double.MAX_VALUE) {
-            badLakes.add(lake);
-            go(S.FIND_LAVA);
+            abandonSite();
             return;
         }
         ox = bx; g = bg; oz = bz;
         bot.say("Building a nether portal at " + ox + ", " + g + ", " + oz);
+        layout();
+        castIdx = 0;
+        castState = 0;
+        castFails = 0;
+        lightCycles = 0;
+        go(S.PREP);
+    }
+
+    /** Fills {@link #casts} with the ten frame blocks for the origin {@code ox, g, oz}, in building order. */
+    private void layout() {
         casts = new ArrayList<>();
         // standing spots two blocks in front of the frame, one block above the cleared floor (the bot has to pillar up)
         BlockPos wl = new BlockPos(ox + 1, g + 1, oz + 2);
@@ -263,10 +368,6 @@ public final class PortalTask extends Task {
         // top row; helper = the (unused) top corner
         casts.add(new Cast(new BlockPos(ox + 1, g + 3, oz), new BlockPos(ox, g + 3, oz), wl.above(2)));
         casts.add(new Cast(new BlockPos(ox + 2, g + 3, oz), new BlockPos(ox + 3, g + 3, oz), wr.above(2)));
-        castIdx = 0;
-        castState = 0;
-        castFails = 0;
-        go(S.PREP);
     }
 
     private boolean isFrame(BlockPos p) {
@@ -281,8 +382,7 @@ public final class PortalTask extends Task {
     private void prep() {
         bot.setStatus("clearing the portal site");
         if (stateTicks > 6000) {
-            badLakes.add(lake);
-            go(S.FIND_LAVA);
+            abandonSite();
             return;
         }
         if (workTarget != null && satisfied(workTarget)) workTarget = null;
@@ -354,8 +454,7 @@ public final class PortalTask extends Task {
         }
         if (stateTicks > 30000 || castFails > 8) {
             bot.say("Portal attempt failed here, trying another spot.");
-            badLakes.add(lake);
-            go(S.FIND_LAVA);
+            abandonSite();
             return;
         }
         Cast c = casts.get(castIdx);
@@ -367,8 +466,9 @@ public final class PortalTask extends Task {
             case 0 -> {
                 if (bot.inv.count(Items.LAVA_BUCKET) == 0) {
                     if (bot.inv.count(Items.BUCKET) == 0) {
-                        // no bucket at all: nothing we can do here
-                        castFails++;
+                        // no bucket to fetch lava with: nothing we can do here. Counting this as a cast failure
+                        // would blacklist the pool within 9 ticks, so end the task and let the plan craft one.
+                        if (castTicks > 100) needItem("a second bucket");
                         return;
                     }
                     FetchFluidTask t = new FetchFluidTask(bot, true);
@@ -380,7 +480,8 @@ public final class PortalTask extends Task {
                 }
                 if (bot.inv.count(Items.WATER_BUCKET) == 0 && !bs(q).getFluidState().isSource()) {
                     if (bot.inv.count(Items.BUCKET) == 0) {
-                        castFails++;
+                        // the water is gone and there is no empty bucket to refill (see above)
+                        if (castTicks > 100) needItem("a bucket for water");
                         return;
                     }
                     run(new FetchFluidTask(bot, false));
@@ -472,6 +573,9 @@ public final class PortalTask extends Task {
     /** Scoops up left-over water, empties the portal interior and re-checks that every frame block is obsidian. */
     private void clean() {
         bot.setStatus("tidying the portal");
+        // something in here cannot be cleared (unreachable / unbreakable block): try to light anyway; light()
+        // gives the site up after a few failed rounds
+        if (stateTicks > 1200) { go(S.LIGHT); return; }
 
         for (BlockPos p : BlockPos.betweenClosed(new BlockPos(ox - 2, g, oz - 1), new BlockPos(ox + 5, g + 5, oz + 3))) {
             FluidState fs = bs(p).getFluidState();
@@ -513,7 +617,21 @@ public final class PortalTask extends Task {
         bot.setStatus("lighting the portal");
         BlockPos inside = new BlockPos(ox + 1, g, oz);
         if (bs(inside).is(Blocks.NETHER_PORTAL)) { portalBlock = inside; go(S.ENTER); return; }
-        if (stateTicks > 600) { go(S.CLEAN); return; }
+        if (bot.inv.count(Items.FLINT_AND_STEEL) == 0) {
+            // without flint and steel this state used to loop LIGHT -> CLEAN -> LIGHT for ever
+            if (stateTicks > 100) needItem("flint and steel");
+            return;
+        }
+        if (stateTicks > 600) {
+            // five rounds of 30 s without a portal appearing: this frame is not going to work
+            if (++lightCycles > 4) {
+                bot.say("Could not light this portal, trying another spot.");
+                abandonSite();
+                return;
+            }
+            go(S.CLEAN);
+            return;
+        }
         if (goal == null) goal = Goal.block(new BlockPos(ox + 1, g, oz + 1));
         Nav.Status st = bot.nav.goTo(goal);
         if (st == Nav.Status.FAILED) goal = null;
@@ -527,6 +645,13 @@ public final class PortalTask extends Task {
         bot.setStatus("entering the nether portal");
         if (!bs(portalBlock).is(Blocks.NETHER_PORTAL)) { go(S.FIND_PORTAL); return; }
         bot.memory.overworldPortal = portalBlock;
+        if (approach != null) {
+            Nav.Status st = bot.nav.goTo(approach);
+            if (st == Nav.Status.RUNNING && ++approachTicks < 200) return;
+            approach = null;
+            pushTicks = 0;
+            return;
+        }
         Vec3 c = Vec3.atBottomCenterOf(portalBlock);
         double d = bot.player().position().distanceTo(c);
         if (d > 2.5) {
@@ -541,7 +666,32 @@ public final class PortalTask extends Task {
             bot.input.forward = true;
             if (bot.player().horizontalCollision && bot.player().onGround()) bot.input.jump = true;
         }
+        // 8 s of pushing and still here (the trip takes 4 s): we are wedged against the frame, or the portal is on
+        // cooldown. Walk to the block in front of an open face and come in again from there.
+        if (++pushTicks > 160) {
+            approach = sideGoal(bot, portalBlock, approachSide++);
+            approachTicks = 0;
+            pushTicks = 0;
+            return;
+        }
         if (stateTicks > 600) go(S.FIND_PORTAL);
+    }
+
+    /**
+     * Goal for standing directly in front of one of the two open faces of the portal block at {@code portal}
+     * ({@code attempt} alternates between them; a blocked side is skipped). Also used by {@link NetherReturnTask}.
+     */
+    static Goal sideGoal(Bot bot, BlockPos portal, int attempt) {
+        BlockState s = bot.level().getBlockState(portal);
+        Direction.Axis axis = s.hasProperty(NetherPortalBlock.AXIS) ? s.getValue(NetherPortalBlock.AXIS) : Direction.Axis.X;
+        // the portal plane runs along its axis, so the open faces look along the other horizontal axis
+        Direction face = axis == Direction.Axis.X ? Direction.SOUTH : Direction.EAST;
+        if (attempt % 2 != 0) face = face.getOpposite();
+        BlockPos side = portal.relative(face);
+        if ((Blocks2.flags(bot.level(), side, bot.level().getBlockState(side)) & Blocks2.PASS) == 0) {
+            side = portal.relative(face.getOpposite());
+        }
+        return Goal.block(side);
     }
 
     /**
