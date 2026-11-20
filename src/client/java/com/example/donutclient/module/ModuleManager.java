@@ -4,12 +4,17 @@ import com.example.donutclient.DonutClient;
 import com.example.donutclient.hud.HudContext;
 import com.example.donutclient.modules.CoordinatesModule;
 import com.example.donutclient.modules.FpsModule;
+import com.example.donutclient.gui.OreEspScreen;
 import com.example.donutclient.modules.KeystrokesModule;
+import com.example.donutclient.modules.OreEspModule;
 import com.example.donutclient.modules.ZoomModule;
 import com.mojang.blaze3d.platform.InputConstants;
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
+import net.fabricmc.fabric.api.client.rendering.v1.level.LevelExtractionContext;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
+
+import org.lwjgl.glfw.GLFW;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -30,6 +35,8 @@ public final class ModuleManager {
 
     private final Map<String, Module> modules = new LinkedHashMap<>();
     private final Map<Module, KeyMapping> keyMappings = new LinkedHashMap<>();
+    /** Keybinds that run an action instead of toggling a module (e.g. open a settings screen). */
+    private final Map<KeyMapping, Runnable> actions = new LinkedHashMap<>();
     private final KeyMapping.Category keyCategory =
             KeyMapping.Category.register(DonutClient.id("modules"));
 
@@ -41,6 +48,24 @@ public final class ModuleManager {
         register(new CoordinatesModule());
         register(new KeystrokesModule());
         register(new ZoomModule());
+
+        OreEspModule oreEsp = new OreEspModule();
+        register(oreEsp);
+        registerAction("ore_esp_settings", GLFW.GLFW_KEY_O, () -> {
+            Minecraft mc = Minecraft.getInstance();
+            if (mc.gui.screen() == null) mc.gui.setScreen(new OreEspScreen(oreEsp));
+        });
+    }
+
+    /** Register a keybind that runs {@code action} on press. Needs a key.donutclient.&lt;id&gt; lang entry. */
+    public void registerAction(String id, int defaultKey, Runnable action) {
+        KeyMapping mapping = KeyMappingHelper.registerKeyMapping(new KeyMapping(
+                "key." + DonutClient.MOD_ID + "." + id,
+                InputConstants.Type.KEYSYM,
+                defaultKey,
+                keyCategory
+        ));
+        actions.put(mapping, action);
     }
 
     public void register(Module module) {
@@ -71,8 +96,20 @@ public final class ModuleManager {
                 e.getKey().toggle();
             }
         }
+        for (Map.Entry<KeyMapping, Runnable> e : actions.entrySet()) {
+            while (e.getKey().consumeClick()) {
+                e.getValue().run();
+            }
+        }
         for (Module m : modules.values()) {
             if (m.isEnabled()) m.onTick();
+        }
+    }
+
+    /** Called from LevelExtractionEvents.END_EXTRACTION. */
+    public void onRenderWorld(LevelExtractionContext ctx) {
+        for (Module m : modules.values()) {
+            if (m.isEnabled()) m.onRenderWorld(ctx);
         }
     }
 

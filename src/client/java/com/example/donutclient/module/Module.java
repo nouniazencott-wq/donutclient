@@ -2,6 +2,8 @@ package com.example.donutclient.module;
 
 import com.example.donutclient.DonutClient;
 import com.example.donutclient.hud.HudContext;
+import com.google.gson.JsonObject;
+import net.fabricmc.fabric.api.client.rendering.v1.level.LevelExtractionContext;
 import net.minecraft.client.Minecraft;
 
 /**
@@ -11,10 +13,12 @@ import net.minecraft.client.Minecraft;
  *  - onEnable / onDisable       state transitions
  *  - onTick                     every client tick while enabled
  *  - onRenderHud                every HUD frame while enabled
+ *  - onRenderWorld              every world frame while enabled (3D overlays)
+ *  - writeSettings/readSettings extra options persisted in the config file
  *
  * Keep modules small and single-purpose. If a module needs to change vanilla
  * behaviour that has no event, add a Mixin in the mixin package and have the
- * mixin consult the module's state (see GameRendererMixin + ZoomModule).
+ * mixin consult the module's state (see CameraMixin + ZoomModule).
  */
 public abstract class Module {
     protected final Minecraft mc = Minecraft.getInstance();
@@ -62,6 +66,19 @@ public abstract class Module {
 
     /** Called every HUD frame while enabled (only when a world is loaded). */
     public void onRenderHud(HudContext ctx) {}
+
+    /**
+     * Called every frame while enabled, at the end of level extraction, while
+     * vanilla's per-frame gizmo collector is open. Draw 3D overlays here with
+     * net.minecraft.gizmos.Gizmos; they are rendered on the following frame.
+     */
+    public void onRenderWorld(LevelExtractionContext ctx) {}
+
+    /** Store module-specific options. Called when the config is saved. */
+    public void writeSettings(JsonObject json) {}
+
+    /** Restore what writeSettings stored. Keys may be missing (older config). */
+    public void readSettings(JsonObject json) {}
 
     // ---- metadata --------------------------------------------------------
 

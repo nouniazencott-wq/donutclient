@@ -3,5 +3,7 @@
   "key.donutclient.fps": "Toggle FPS",
   "key.donutclient.coordinates": "Toggle Coordinates",
   "key.donutclient.keystrokes": "Toggle Keystrokes",
-  "key.donutclient.zoom": "Zoom (hold)"
+  "key.donutclient.zoom": "Zoom (hold)",
+  "key.donutclient.ore_esp": "Toggle Ore ESP",
+  "key.donutclient.ore_esp_settings": "Ore ESP Settings (choose ores)"
 }

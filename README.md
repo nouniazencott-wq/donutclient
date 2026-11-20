@@ -33,13 +33,31 @@ Fabric Loader profile for 26.2.
 src/main/      common code (tiny — this mod is client-only)
 src/client/    everything else
   DonutClientClient.java        entrypoint: wires events → ModuleManager
-  module/Module.java         base class: toggle, keybind, onTick, onRenderHud
+  module/Module.java         base class: toggle, keybind, onTick, onRenderHud, onRenderWorld
   module/ModuleManager.java  registry + event dispatch + keybinds
-  modules/*.java             the features (FPS, Coordinates, Keystrokes, Zoom)
+  modules/*.java             the features (FPS, Coordinates, Keystrokes, Zoom, Ore ESP)
   hud/HudContext.java        thin facade over Minecraft's HUD drawing API
-  mixin/GameRendererMixin    FOV hook for Zoom (the only vanilla patch)
+  modules/OreEspModule.java  ore boxes + tracers (scan in onTick, draw in onRenderWorld)
+  esp/OreType.java           the ores Ore ESP knows about (blocks + colour)
+  gui/OreEspScreen.java      checkbox screen for choosing ores
+  mixin/CameraMixin          FOV hook for Zoom (the only vanilla patch)
   config/ClientConfig.java   saves enabled state to config/donutclient.json
 ```
+
+## Ore ESP
+
+Outlines the ores you pick with coloured boxes that show through walls and
+draws tracer lines from your crosshair to the nearest veins. Blocks are
+rendered normally — it is an overlay, not a see-through-world X-ray.
+
+- **G** toggles it, **O** opens the settings screen (both rebindable).
+- In the settings screen tick the ores to show: Diamond and Ancient Debris are
+  on by default; Emerald, Gold, Iron, Redstone, Lapis, Copper, Coal and Nether
+  Quartz are available. You can also turn tracers off and set the scan range
+  (32–128 blocks).
+- It only knows about blocks the server has sent you, so servers with an
+  anti-xray plugin will hide or fake ores. Most multiplayer servers forbid
+  this kind of mod — check the rules before using it online.
 
 ## Adding a module
 
