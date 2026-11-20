@@ -204,8 +204,9 @@ public final class MineTask extends Task {
 
     /**
      * True if breaking the block could hurt: lava touches it on any side (including below, where the bot would
-     * drop into it after digging the block out), or water lies on top of it (the block is under water). Water
-     * merely next to the block is harmless and no longer rules it out.
+     * drop into it after digging the block out), water lies on top of it (the block is under water), or deep
+     * water (two or more blocks) stands beside it. Shallow water next to or below the block is harmless and does
+     * not rule it out.
      */
     private boolean unsafe(BlockPos p) {
         for (Direction d : Direction.values()) {
@@ -214,6 +215,9 @@ public final class MineTask extends Task {
                 continue;
             }
             if (fs.is(FluidTags.LAVA) || d == Direction.UP) {
+                return true;
+            }
+            if (d != Direction.DOWN && !bot.level().getBlockState(p.relative(d).above()).getFluidState().isEmpty()) {
                 return true;
             }
         }

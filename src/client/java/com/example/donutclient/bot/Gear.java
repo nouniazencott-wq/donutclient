@@ -34,7 +34,7 @@ public final class Gear {
 
     /**
      * Best pickaxe tier in the 36 inventory slots:
-     * 0 = none, 1 = wood/gold, 2 = stone, 3 = iron, 4 = diamond or better.
+     * 0 = none, 1 = wood/gold, 2 = stone/copper, 3 = iron, 4 = diamond or netherite.
      */
     public int pickTier() {
         int best = 0;
@@ -45,9 +45,11 @@ public final class Gear {
             }
             Item item = stack.getItem();
             int tier = item == Items.WOODEN_PICKAXE || item == Items.GOLDEN_PICKAXE ? 1
-                    : item == Items.STONE_PICKAXE ? 2
                     : item == Items.IRON_PICKAXE ? 3
-                    : 4;
+                    : item == Items.DIAMOND_PICKAXE || item == Items.NETHERITE_PICKAXE ? 4
+                    // Stone, copper and anything unknown: stone level, so the bot never believes it can mine
+                    // diamond-tier blocks with a pickaxe that cannot.
+                    : 2;
             best = Math.max(best, tier);
         }
         return best;

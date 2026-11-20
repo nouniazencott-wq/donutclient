@@ -74,8 +74,19 @@ public final class Inv {
         return count(item) > 0;
     }
 
+    /**
+     * Number of throwaway blocks {@link #holdThrowaway} can actually put in the hand: only the 36 inventory slots
+     * count, not the offhand, so callers never wait for a block that cannot be selected.
+     */
     public int countThrowaway() {
-        return count(s -> THROWAWAY.contains(s.getItem()));
+        int total = 0;
+        for (int i = 0; i < 36; i++) {
+            ItemStack stack = get(i);
+            if (!stack.isEmpty() && THROWAWAY.contains(stack.getItem()) && stack.getItem() instanceof BlockItem) {
+                total += stack.getCount();
+            }
+        }
+        return total;
     }
 
     /** First inventory slot (0-35) holding a matching stack, or -1. */
@@ -187,6 +198,15 @@ public final class Inv {
             return true;
         }
         if (stack.is(ItemTags.LOGS) || stack.is(ItemTags.PLANKS) || stack.is(ItemTags.STONE_TOOL_MATERIALS)) {
+            return true;
+        }
+        // Valuables and useful finds that are not part of the bot's own crafting tree but must not be binned.
+        if (stack.is(ItemTags.BEDS) || stack.is(ItemTags.ARROWS) || stack.is(ItemTags.BOATS)) {
+            return true;
+        }
+        if (item == Items.DIAMOND || item == Items.GOLD_INGOT || item == Items.RAW_GOLD || item == Items.STRING
+                || item == Items.IRON_BLOCK || item == Items.RAW_IRON_BLOCK || item == Items.COAL_BLOCK
+                || item == Items.IRON_NUGGET) {
             return true;
         }
         return item == Items.STICK || item == Items.COAL || item == Items.CHARCOAL || item == Items.RAW_IRON
@@ -352,20 +372,30 @@ public final class Inv {
         if (item == Items.DIAMOND_SWORD) {
             return 7.0;
         }
+        // Slow but hard-hitting weapons rank just below the sword that out-damages them over time.
+        if (item == Items.NETHERITE_AXE || item == Items.TRIDENT) {
+            return 6.5;
+        }
         if (item == Items.IRON_SWORD) {
             return 6.0;
         }
-        if (item == Items.STONE_SWORD) {
+        if (item == Items.DIAMOND_AXE || item == Items.MACE) {
+            return 5.5;
+        }
+        if (item == Items.STONE_SWORD || item == Items.COPPER_SWORD) {
             return 5.0;
         }
         if (item == Items.IRON_AXE) {
             return 4.5;
         }
-        if (item == Items.STONE_AXE) {
+        if (item == Items.STONE_AXE || item == Items.COPPER_AXE) {
             return 4.2;
         }
         if (item == Items.WOODEN_SWORD || item == Items.GOLDEN_SWORD) {
             return 4.0;
+        }
+        if (item == Items.WOODEN_AXE || item == Items.GOLDEN_AXE) {
+            return 3.5;
         }
         if (stack.is(ItemTags.PICKAXES)) {
             return 2.0;

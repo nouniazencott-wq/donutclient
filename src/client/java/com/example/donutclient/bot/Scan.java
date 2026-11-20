@@ -40,8 +40,10 @@ public final class Scan {
         // Ring at which we first had enough results; -1 until then.
         int enoughAtRing = -1;
         for (int ring = 0; ring <= chunkRadius; ring++) {
-            for (int dx = -ring; dx <= ring; dx++) {
-                for (int dz = -ring; dz <= ring; dz++) {
+            // The hard cap is also checked per chunk: one outer ring of a very common block (stone, netherrack)
+            // would otherwise add millions of positions and freeze the game for that tick.
+            for (int dx = -ring; dx <= ring && out.size() <= 20000; dx++) {
+                for (int dz = -ring; dz <= ring && out.size() <= 20000; dz++) {
                     // Only the border of the square: inner chunks were done by earlier rings.
                     if (Math.max(Math.abs(dx), Math.abs(dz)) != ring) {
                         continue;

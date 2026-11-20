@@ -531,21 +531,14 @@ public final class Reflex {
             bot.nav.reset();
             bot.inv.holdWeapon();
             bot.act.lookAt(threat.getBoundingBox().getCenter());
+            // The shield stays up during the whole fight: attacks are sent straight through the game mode, which
+            // (unlike the attack key) is not blocked by an item being used, so blocking costs no hits.
+            raiseShield();
             double dist = Math.sqrt(threat.getBoundingBox().distanceToSqr(player.getEyePosition()));
             if (dist < 3.0 && bot.act.attackReady()) {
-                // Lower the shield for the hit: a player holding the use key cannot attack, so a permanently
-                // raised shield meant the bot never fought back. It goes up again on the next tick while the
-                // attack recharges.
-                release();
-                if (player.isUsingItem()) {
-                    mc.gameMode.releaseUsingItem(player);
-                }
                 bot.act.attack(threat);
-            } else {
-                raiseShield();
-                if (dist > 2.4 && player.onGround() && safeAhead(threat)) {
-                    bot.input.forward = true;
-                }
+            } else if (dist > 2.4 && player.onGround() && safeAhead(threat)) {
+                bot.input.forward = true;
             }
             if (player.isInWater()) {
                 bot.input.jump = true;

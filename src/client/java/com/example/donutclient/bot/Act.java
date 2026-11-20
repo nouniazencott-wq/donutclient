@@ -86,6 +86,13 @@ public final class Act {
         if (state.liquid()) {
             return true;
         }
+        // Bedrock, portal frames and the like can never be broken: do not switch tools and swing at them for
+        // nothing; the caller's own timeout deals with the block staying there.
+        if (state.getDestroySpeed(mc.level, pos) < 0.0F) {
+            stopBreaking();
+            breakingRequested = true;
+            return false;
+        }
         bot.inv.holdBestTool(state);
         lookAt(pos);
         breaking = true;
