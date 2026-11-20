@@ -389,6 +389,9 @@ public final class BeatGameTask extends Task {
 				bot.say("Stage: " + s.name);
 			}
 			current = s;
+			bot.stageName = s.name;
+			bot.stageIndex = stages.indexOf(s) + 1;
+			bot.stageCount = stages.size();
 			bot.nav.reset();
 			task = s.make.get();
 			return false;

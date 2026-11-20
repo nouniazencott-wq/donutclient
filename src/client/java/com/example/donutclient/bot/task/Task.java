@@ -27,9 +27,16 @@ public abstract class Task {
 	 */
 	public abstract boolean tick();
 
-	/** Called when the task is taken off the bot before it finished; drops the child task. */
+	/**
+	 * Called when the task is taken off the bot before it finished. The child task is interrupted too (so it can
+	 * let go of keys, close menus, ...) and then dropped.
+	 */
 	public void onInterrupted() {
+		Task child = sub;
 		sub = null;
+		if (child != null) {
+			child.onInterrupted();
+		}
 	}
 
 	/**

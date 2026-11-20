@@ -61,7 +61,74 @@ public final class Bot {
     private boolean savedPauseOnLostFocus = true;
     public int deaths;
 
+    /** True while the user has taken the controls back without ending the run (/bot pause). */
+    private boolean paused;
+    /** Set once the current death has been counted, so a slow respawn is not counted twice. */
+    private boolean deathHandled;
+    /** Task errors in a row (within a minute of each other); too many stop the bot. */
+    private int errorStreak;
+    private long lastErrorTick;
+    /** Value of {@link #tick} when the current run started. */
+    private long startTick;
+
+    /** Name of the plan stage being worked on, for the HUD. Empty while there is none. */
+    public String stageName = "";
+    /** 1-based position of that stage in the plan, and the plan's length (0 while unknown). */
+    public int stageIndex;
+    public int stageCount;
+
     private Bot() {}
+
+    public boolean isPaused() {
+        return paused;
+    }
+
+    /**
+     * Pauses or resumes a running bot. While paused the keyboard is back in control and the plan is kept; on resume
+     * the bot re-plans from wherever the player now stands.
+     */
+    public void setPaused(boolean value) {
+        if (!active || paused == value) {
+            return;
+        }
+        paused = value;
+        nav.reset();
+        act.stopBreaking();
+        reflex.release();
+        input.clear();
+        if (root != null) {
+            root.onInterrupted();
+        }
+        if (paused) {
+            if (mc.player != null && mc.player.input == input) {
+                mc.player.input = new KeyboardInput(mc.options);
+            }
+            status = "paused";
+            say("Paused. You have the controls. Use /bot resume to let me continue.");
+        } else {
+            say("Resuming.");
+        }
+    }
+
+    /** Bot ticks played in the current run (20 per second, not counting pauses). */
+    public long elapsedTicks() {
+        return tick - startTick;
+    }
+
+    /** The current run's play time as m:ss or h:mm:ss. */
+    public String elapsedText() {
+        long seconds = elapsedTicks() / 20;
+        long h = seconds / 3600, m = seconds % 3600 / 60, s = seconds % 60;
+        return h > 0 ? String.format("%d:%02d:%02d", h, m, s) : String.format("%d:%02d", m, s);
+    }
+
+    /** Called when the player leaves the world: stop, and forget everything learned about that world. */
+    public void onWorldLeft() {
+        stop();
+        memory.reset();
+        deaths = 0;
+        lastDim = null;
+    }
 
     public boolean isActive() {
         return active;
@@ -113,13 +180,15 @@ public final class Bot {
         if (err != null) {
             return err;
         }
+        stageName = "walking to " + goal;
         root = new Task(this) {
             @Override
             public boolean tick() {
-                Bot.this.setStatus("debug nav to " + goal);
+                Bot.this.setStatus("walking to " + goal);
                 Nav.Status st = Bot.this.nav.goTo(goal);
                 if (st != Nav.Status.RUNNING) {
                     Bot.this.dbg("debug nav finished: " + st);
+                    Bot.this.say(st == Nav.Status.DONE ? "Arrived." : "I couldn't find a way there.");
                 }
                 return st != Nav.Status.RUNNING;
             }
@@ -143,9 +212,20 @@ public final class Bot {
         // Keep the game running when the window loses focus, so the bot can play in the background.
         savedPauseOnLostFocus = mc.options.pauseOnLostFocus;
         mc.options.pauseOnLostFocus = false;
+        paused = false;
+        deathHandled = false;
+        respawnCooldown = 0;
+        graceTicks = 0;
+        errorStreak = 0;
+        startTick = tick;
+        stageName = "";
+        stageIndex = 0;
+        stageCount = 0;
+        lastDim = mc.level.dimension();
+        memory.currentDim = lastDim;
         root = new BeatGameTask(this);
         nav.reset();
-        say("Bot started. I'll try to beat the game. Use /bot stop to take back control.");
+        say("Bot started. /bot pause to take over for a while, /bot stop to end.");
         return null;
     }
 
@@ -155,6 +235,8 @@ public final class Bot {
             return;
         }
         active = false;
+        paused = false;
+        stageName = "";
         mc.options.pauseOnLostFocus = savedPauseOnLostFocus;
         root = null;
         nav.reset();
@@ -197,33 +279,44 @@ public final class Bot {
         if (!active) return;
         if (!canRun()) { active = false; root = null; status = "idle"; return; }
         if (mc.isPaused()) return;
+        if (paused) {
+            // The user is playing: make sure the keyboard really is in control and do nothing else.
+            if (mc.player.input == input) mc.player.input = new KeyboardInput(mc.options);
+            return;
+        }
         tick++;
         LocalPlayer p = mc.player;
+        memory.currentDim = mc.level.dimension();
 
-        // Dead: remember where, respawn (retrying every 30 ticks) and restart the current task.
+        // Dead: remember where (once per death), respawn (retrying every 30 ticks) and restart the current task.
         if (p.isDeadOrDying() || mc.gui.screen() instanceof DeathScreen) {
-            if (respawnCooldown-- <= 0) {
-                respawnCooldown = 30;
+            if (!deathHandled) {
+                deathHandled = true;
+                respawnCooldown = 0;
                 deaths++;
-                int near = 0;
-                for (BlockPos d : memory.dangerZones) if (d.distSqr(p.blockPosition()) < 400.0) near++;
-                memory.dangerZones.add(p.blockPosition());
-                memory.deathPos = p.blockPosition();
+                BlockPos where = p.blockPosition();
+                int near = memory.deathsNear(where, mc.level.dimension(), 20.0);
+                memory.addDanger(where, mc.level.dimension());
+                memory.deathPos = where;
                 memory.deathDim = mc.level.dimension();
                 memory.deathTick = tick;
                 memory.deathsNearby = near;
                 memory.diedRecovering = memory.recovering;
                 memory.recovering = false;
                 say("I died (" + deaths + "). Respawning and carrying on.");
-                p.respawn();
-                mc.gui.setScreen(null);
                 nav.reset();
                 reflex.release();
                 if (root != null) root.onInterrupted();
+            }
+            if (respawnCooldown-- <= 0) {
+                respawnCooldown = 30;
+                p.respawn();
+                mc.gui.setScreen(null);
                 graceTicks = 60;
             }
             return;
         }
+        deathHandled = false;
         respawnCooldown = 0;
         // World still loading (after login, respawn or a portal).
         if (!p.connection.hasClientLoaded()) return;
@@ -246,20 +339,39 @@ public final class Bot {
         input.clear();
         act.breakingRequested = false;
 
-        if (tick % 20 == 0) inv.dropJunk();
+        // Make room once a second, but never while a crafting table / furnace screen is open.
+        if (tick % 20 == 0 && inv.menuIsInventory()) inv.dropJunk();
 
         try {
             // Reflexes (survival reactions) pre-empt the task tree for this tick.
             if (!reflex.tick() && root != null && root.tick()) {
-                say("Done: the game is beaten!");
+                if (root instanceof BeatGameTask) {
+                    say("Done: the game is beaten! Time " + elapsedText() + ", deaths " + deaths + ".");
+                }
                 stop();
                 return;
             }
         } catch (RuntimeException e) {
             // A bug in one task must not crash the game: log it and let the task tree start over.
             DonutClient.LOGGER.error("[bot] task error", e);
-            nav.reset();
-            if (root != null) root.onInterrupted();
+            if (tick - lastErrorTick > 1200) errorStreak = 0;
+            lastErrorTick = tick;
+            errorStreak++;
+            if (errorStreak >= 8) {
+                // The same thing keeps failing: stopping beats spamming the log forever.
+                say("I keep running into an internal error (" + e + "), so I'm stopping. The log has the details.");
+                stop();
+                return;
+            }
+            try {
+                nav.reset();
+                reflex.release();
+                if (root != null) root.onInterrupted();
+            } catch (RuntimeException e2) {
+                DonutClient.LOGGER.error("[bot] error while resetting after a task error", e2);
+            }
+            // Back off a little longer after each repeat before trying again.
+            graceTicks = Math.min(20 * errorStreak, 200);
         }
         // Nobody asked to keep mining this tick: let go of the block.
         if (!act.breakingRequested) act.stopBreaking();
