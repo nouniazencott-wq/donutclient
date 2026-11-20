@@ -30,6 +30,7 @@ public final class Bot {
     public final Reflex reflex = new Reflex(this);
     public final Memory memory = new Memory();
     public final Gear gear = new Gear(this);
+    public final Aim aim = new Aim(this);
 
     public long tick;
     private boolean active;
@@ -99,6 +100,11 @@ public final class Bot {
         }
     }
 
+    /** Diagnostic detail for the log file only. */
+    public void dbg(String msg) {
+        DonutClient.LOGGER.info("[bot:dbg] {}", msg);
+    }
+
     public void say(String msg) {
         DonutClient.LOGGER.info("[bot] {}", msg);
         if (mc.player != null) mc.gui.hud.getChat().addClientSystemMessage(Component.literal("[Bot] " + msg));
@@ -116,7 +122,13 @@ public final class Bot {
             if (respawnCooldown-- <= 0) {
                 respawnCooldown = 30;
                 deaths++;
+                int near = 0;
+                for (BlockPos d : memory.dangerZones) if (d.distSqr(p.blockPosition()) < 20 * 20) near++;
                 memory.dangerZones.add(p.blockPosition());
+                memory.deathPos = p.blockPosition();
+                memory.deathDim = mc.level.dimension();
+                memory.deathTick = tick;
+                memory.deathsNearby = near;
                 say("I died (" + deaths + "). Respawning and carrying on.");
                 p.respawn();
                 mc.gui.setScreen(null);

@@ -290,8 +290,9 @@ public final class Pathfinder {
         }
 
         if (inWater) {
+            // Diving costs breath: make it expensive so paths stay near the surface.
             if ((fl(x, y + 1, z) & WATER) != 0) relax(n, x, y + 1, z, 5);
-            if ((fl(x, y - 1, z) & WATER) != 0) relax(n, x, y - 1, z, 6);
+            if ((fl(x, y - 1, z) & WATER) != 0) relax(n, x, y - 1, z, 40);
         } else {
             // Pillar up.
             if (canPlace) {

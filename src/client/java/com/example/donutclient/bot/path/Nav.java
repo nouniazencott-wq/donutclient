@@ -20,6 +20,7 @@ public final class Nav {
     private int planTicks;
     private double bestH = Double.MAX_VALUE;
     private int noProgress;
+    private int loadWait;
     public boolean allowBreak = true;
     public String info = "";
 
@@ -57,7 +58,10 @@ public final class Nav {
                 if (execReachesGoal) { exec = null; return Status.DONE; }
             }
             exec = null;
-            if (failures > 12) return Status.FAILED;
+            if (failures > 12) {
+                bot.dbg("nav failed: " + info + " (" + goal + ")");
+                return Status.FAILED;
+            }
         }
 
         if (search == null) {
@@ -66,7 +70,10 @@ public final class Nav {
             }
             planTicks = 0;
             double h = goal.h(feet.getX(), feet.getY(), feet.getZ());
-            if (h < bestH - 2) { bestH = h; noProgress = 0; } else if (++noProgress > 6) return Status.FAILED;
+            if (h < bestH - 2) { bestH = h; noProgress = 0; } else if (++noProgress > 6) {
+                bot.dbg("nav failed: no progress toward " + goal + " from " + feet.toShortString());
+                return Status.FAILED;
+            }
             search = new Pathfinder(bot.level(), feet, goal, bot.inv.tools(),
                     bot.inv.countThrowaway() > 2, allowBreak, 40000);
         }
@@ -75,10 +82,19 @@ public final class Nav {
 
         List<BlockPos> path = search.path();
         execReachesGoal = search.reachedGoal();
+        int expanded = search.expanded();
         search = null;
+        if (path == null && expanded <= 4 && ++loadWait < 200) {
+            return Status.RUNNING; // surroundings probably not loaded yet (just respawned / changed dimension)
+        }
+        loadWait = 0;
         if (path == null || path.size() < 2) {
             info = "no path to " + goal;
-            return ++failures > 3 ? Status.FAILED : Status.RUNNING;
+            if (++failures > 3) {
+                bot.dbg("nav failed: no path from " + feet.toShortString() + " to " + goal);
+                return Status.FAILED;
+            }
+            return Status.RUNNING;
         }
         exec = new PathExecutor(bot, path);
         return Status.RUNNING;

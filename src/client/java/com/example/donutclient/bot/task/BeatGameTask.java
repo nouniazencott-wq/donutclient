@@ -15,6 +15,7 @@ import net.minecraft.world.entity.animal.pig.Pig;
 import net.minecraft.world.entity.animal.sheep.Sheep;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 
@@ -30,6 +31,8 @@ public final class BeatGameTask extends Task {
     private static final Ing[] IRON_GEAR = {Ing.IRON_PICK, Ing.BUCKET, Ing.IRON_SWORD, Ing.SHIELD, Ing.FLINT_STEEL,
             Ing.CHESTPLATE, Ing.LEGGINGS, Ing.HELMET, Ing.BOOTS};
 
+    private static final int EYES_NEEDED = 12;
+
     private final List<Stage> stages = new ArrayList<>();
     private Stage current;
     private Task task;
@@ -39,6 +42,7 @@ public final class BeatGameTask extends Task {
         var inv = bot.inv;
         var gear = bot.gear;
 
+        stage("recover items", () -> !RecoverItemsTask.pending(bot), () -> new RecoverItemsTask(bot));
         stage("gather wood", () -> woodUnits() >= 40 || gear.pickTier() >= 1, () -> wood(12));
         stage("wooden pickaxe", () -> gear.pickTier() >= 1, () -> new CraftTask(bot).want(Ing.WOOD_PICK, 1));
         stage("mine stone", () -> inv.count(Ing.COBBLE.pred) >= 20 || (gear.pickTier() >= 2 && hasWeapon()),
@@ -74,9 +78,27 @@ public final class BeatGameTask extends Task {
             return new CraftTask(bot).want(g, have + 1);
         });
         stage("equip", () -> !EquipTask.needed(bot), () -> new EquipTask(bot));
+        stage("building blocks", () -> inv.countThrowaway() >= 64 || !inOverworld() || !needNether(),
+                () -> stone(inv.count(Ing.COBBLE.pred) + 96));
+        stage("water bucket", () -> inv.has(Items.WATER_BUCKET) || !inOverworld() || !needNether(),
+                () -> new FetchFluidTask(bot, false));
+        stage("enter the nether", () -> !inOverworld() || !needNether(), () -> new PortalTask(bot));
     }
 
     // ---- helpers ------------------------------------------------------------------
+
+    private boolean inOverworld() { return bot.level().dimension() == Level.OVERWORLD; }
+
+    private boolean inNether() { return bot.level().dimension() == Level.NETHER; }
+
+    /** Eyes of ender the bot could make right now. */
+    private int eyesPossible() {
+        var inv = bot.inv;
+        int powder = inv.count(Items.BLAZE_POWDER) + 2 * inv.count(Items.BLAZE_ROD);
+        return inv.count(Items.ENDER_EYE) + Math.min(powder, inv.count(Items.ENDER_PEARL));
+    }
+
+    private boolean needNether() { return eyesPossible() < EYES_NEEDED && !bot.memory.portalFilled; }
 
     private Ing nextGear() {
         var gear = bot.gear;

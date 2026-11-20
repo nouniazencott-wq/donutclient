@@ -67,7 +67,7 @@ public final class SmeltTask extends Task {
         if (busy()) return false;
         LocalPlayer p = bot.player();
         stateTicks++;
-        bot.setStatus("smelting " + what);
+        if (state != S.WAIT) bot.setStatus("smelting " + what);
         switch (state) {
             case PREP -> {
                 if (bot.inv.count(input) == 0) { go(S.PICKUP); return false; }

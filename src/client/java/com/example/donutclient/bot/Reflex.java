@@ -6,6 +6,7 @@ import net.minecraft.core.component.DataComponents;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.boss.enderdragon.EnderDragon;
+import net.minecraft.world.entity.monster.Creeper;
 import net.minecraft.world.entity.monster.EnderMan;
 import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.entity.monster.zombie.ZombifiedPiglin;
@@ -55,6 +56,28 @@ public final class Reflex {
             release();
             bot.inv.holdWeapon();
             bot.act.attack(threat);
+        }
+
+        // Creepers about to blow: get out of the blast.
+        for (Entity e : bot.level().entitiesForRendering()) {
+            if (e instanceof Creeper c && c.isAlive() && c.getSwellDir() > 0 && c.distanceToSqr(p) < 6 * 6) {
+                release();
+                bot.act.stopBreaking();
+                double dx = p.getX() - c.getX(), dz = p.getZ() - c.getZ();
+                bot.act.faceXZ(p.getX() + dx * 4, p.getZ() + dz * 4);
+                bot.input.forward = true;
+                bot.input.sprint = true;
+                if (p.horizontalCollision && p.onGround()) bot.input.jump = true;
+                return true;
+            }
+        }
+
+        // Running out of breath: surface.
+        if (p.isUnderWater() && p.getAirSupply() < 140) {
+            release();
+            bot.act.stopBreaking();
+            bot.input.jump = true;
+            return true;
         }
 
         // Eating.
