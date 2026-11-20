@@ -34,6 +34,9 @@ public class BotGameTest implements FabricClientGameTest {
         int shotEvery = Integer.parseInt(props.getProperty("shotEvery", "400"));
         String setup = props.getProperty("setup", "");
         String tickRate = props.getProperty("tickRate", "20");
+        TestFlags.skipRender = Boolean.parseBoolean(props.getProperty("skipRender", "true"));
+        TestFlags.skipExtract = Boolean.parseBoolean(props.getProperty("skipExtract", "false"));
+        TestFlags.skipPresent = Boolean.parseBoolean(props.getProperty("skipPresent", "false"));
         boolean start = Boolean.parseBoolean(props.getProperty("start", "true"));
 
         context.runOnClient(mc -> {
@@ -59,9 +62,13 @@ public class BotGameTest implements FabricClientGameTest {
             for (String cmd : setup.split(";")) {
                 if (!cmd.isBlank()) sp.getServer().runCommand(cmd.trim());
             }
-            if (!tickRate.equals("20")) sp.getServer().runCommand("tick rate " + tickRate);
+            if (!tickRate.equals("20")) {
+                sp.getServer().runCommand("tick rate " + tickRate);
+                TestFlags.speed = Float.parseFloat(tickRate) / 20f;
+            }
             context.waitTicks(20);
             context.takeScreenshot("start");
+            TestFlags.renderWorld = false;
             if (start) context.runOnClient(mc -> {
                 String err = Bot.I.start();
                 if (err != null) LOG.error("bot refused to start: {}", err);
@@ -84,9 +91,13 @@ public class BotGameTest implements FabricClientGameTest {
                             p.getFoodData().getFoodLevel(), Bot.I.status(), items);
                     return Bot.I.isActive();
                 });
+                TestFlags.renderWorld = true;
+                context.waitTicks(2);
                 context.takeScreenshot(String.format("t%06d", elapsed));
+                TestFlags.renderWorld = false;
                 if (start && !active) break;
             }
+            TestFlags.renderWorld = true;
             context.runOnClient(mc -> Bot.I.stop());
         }
     }

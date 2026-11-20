@@ -25,6 +25,7 @@ public final class HuntTask extends Task {
     private double heading = -1;
     private int chaseTicks;
     private int exploreTicks;
+    private final DropCollector drops;
 
     public HuntTask(Bot bot, String what, Predicate<Entity> prey, Predicate<ItemStack> loot, BooleanSupplier done) {
         super(bot);
@@ -32,6 +33,8 @@ public final class HuntTask extends Task {
         this.prey = prey;
         this.loot = loot;
         this.done = done;
+        this.drops = new DropCollector(bot, loot);
+        this.drops.range = 12;
     }
 
     @Override
@@ -46,17 +49,8 @@ public final class HuntTask extends Task {
     public boolean tick() {
         if (done.getAsBoolean()) { bot.nav.reset(); return true; }
 
-        ItemEntity drop = null;
-        double bestD = 12 * 12;
-        for (Entity e : bot.level().entitiesForRendering()) {
-            if (e instanceof ItemEntity ie && loot.test(ie.getItem())) {
-                double d = ie.distanceToSqr(bot.player());
-                if (d < bestD) { bestD = d; drop = ie; }
-            }
-        }
-        if (drop != null && (target == null || !target.isAlive())) {
+        if ((target == null || !target.isAlive()) && drops.tick()) {
             bot.setStatus("collecting " + what + " drops");
-            moveTo(drop.blockPosition(), 0.9);
             return false;
         }
 

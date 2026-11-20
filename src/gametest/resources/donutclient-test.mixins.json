@@ -1,0 +1,7 @@
+{
+  "required": true,
+  "package": "com.example.donutclient.test.mixin",
+  "compatibilityLevel": "JAVA_25",
+  "client": ["GameRendererTestMixin", "FramerateLimiterTestMixin", "MinecraftTestMixin"],
+  "injectors": { "defaultRequire": 1 }
+}

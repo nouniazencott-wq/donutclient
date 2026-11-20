@@ -46,8 +46,7 @@ public final class MineTask extends Task {
     private Locate.Query hintQuery;
     private int hintUses;
     private int exploreTicks;
-    private Goal dropGoal;
-    private int dropTicks;
+    private final DropCollector drops;
     private int breakTicks;
     private int targetTicks;
 
@@ -59,6 +58,7 @@ public final class MineTask extends Task {
         this.drop = drop;
         this.done = done;
         this.walkInto = walkInto;
+        this.drops = new DropCollector(bot, drop);
     }
 
     @Override
@@ -67,7 +67,7 @@ public final class MineTask extends Task {
         target = null;
         goal = null;
         exploreGoal = null;
-        dropGoal = null;
+        drops.reset();
     }
 
     @Override
@@ -75,17 +75,9 @@ public final class MineTask extends Task {
         if (done.getAsBoolean()) { bot.nav.reset(); return true; }
 
         // Pick up drops first.
-        if (target == null || !bot.act.breaking) {
-            ItemEntity item = nearestDrop();
-            if (item != null && dropTicks < 200) {
-                dropTicks++;
-                BlockPos ip = item.blockPosition();
-                if (dropGoal == null || !dropGoal.at(ip.getX(), ip.getY(), ip.getZ())) dropGoal = Goal.near(ip, 0.9);
-                bot.setStatus("picking up " + what);
-                Nav.Status st = bot.nav.goTo(dropGoal);
-                if (st == Nav.Status.FAILED) dropTicks = 200;
-                if (st != Nav.Status.DONE) return false;
-            } else if (item == null) dropTicks = 0;
+        if (!bot.act.breaking && drops.tick()) {
+            bot.setStatus("picking up " + what);
+            return false;
         }
 
         if (target != null && !block.test(bot.level().getBlockState(target))) { target = null; goal = null; }
@@ -128,18 +120,6 @@ public final class MineTask extends Task {
         target = null;
         goal = null;
         bot.nav.reset();
-    }
-
-    private ItemEntity nearestDrop() {
-        ItemEntity best = null;
-        double bestD = 10 * 10;
-        for (Entity e : bot.level().entitiesForRendering()) {
-            if (e instanceof ItemEntity ie && drop.test(ie.getItem())) {
-                double d = ie.distanceToSqr(bot.player());
-                if (d < bestD) { bestD = d; best = ie; }
-            }
-        }
-        return best;
     }
 
     private BlockPos pickTarget() {

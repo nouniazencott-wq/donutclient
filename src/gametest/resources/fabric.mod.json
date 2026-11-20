@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "name": "Donut Client Tests",
   "environment": "client",
+  "mixins": ["donutclient-test.mixins.json"],
   "entrypoints": {
     "fabric-client-gametest": ["com.example.donutclient.test.BotGameTest"]
   }

@@ -22,6 +22,7 @@ public final class PlaceSpot {
                     BlockState below = bot.level().getBlockState(p.below());
                     if (below.isAir() || below.canBeReplaced()) continue;
                     if (below.hasBlockEntity()) continue;
+                    if (bot.player().getBoundingBox().inflate(0.3).intersects(new net.minecraft.world.phys.AABB(p))) continue;
                     double d = bot.act.eyeDist(p) + dy * 0.5;
                     if (d < bestD && d < 4.0) { bestD = d; best = p; }
                 }
