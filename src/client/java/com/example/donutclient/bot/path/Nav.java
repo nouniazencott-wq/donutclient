@@ -4,6 +4,7 @@ import java.util.List;
 
 import com.example.donutclient.bot.Blocks2;
 import com.example.donutclient.bot.Bot;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceKey;
@@ -30,18 +31,27 @@ public final class Nav {
 	private PathExecutor exec;
 	/** Whether the path being walked ends at the goal (false for a partial "best so far" path). */
 	private boolean execReachesGoal;
-	/** Consecutive failed plans / failed path executions. */
+	/** Consecutive failed path executions. */
 	private int failures;
+	/** Consecutive searches that found no path at all (counted apart from {@link #failures}). */
+	private int noPath;
 	/** Ticks spent waiting to land before planning. */
 	private int planTicks;
 	/** Best (lowest) heuristic seen at the start of a plan, for the no-progress watchdog. */
 	private double bestH = Double.MAX_VALUE;
-	/** Number of plans started without getting meaningfully closer to the goal. */
+	/** Number of partial/failed plans started without getting meaningfully closer to the goal. */
 	private int noProgress;
+	/** Number of plans of any kind started since the bot last got meaningfully closer to the goal. */
+	private int plansSinceProgress;
 	/** Ticks spent waiting for chunks to load when the search could not expand at all. */
 	private int loadWait;
 	/** While positive, the next plans are made without pillaring (after a pillar move failed). */
 	private int noPillarPlans;
+	/** Path nodes at which a move failed twice in a row; the planner routes around them (for this goal only). */
+	private final LongOpenHashSet avoid = new LongOpenHashSet();
+	/** Packed position of the node the last failed move was heading for. */
+	private long lastFailNode;
+	private boolean hasLastFailNode;
 
 	/** Whether paths may dig through blocks. */
 	public boolean allowBreak = true;
@@ -62,10 +72,51 @@ public final class Nav {
 		goal = null;
 		search = null;
 		exec = null;
-		failures = 0;
-		noProgress = 0;
-		bestH = Double.MAX_VALUE;
+		clearCounters();
+		// Also drop the wait timers and the pillar ban, so nothing stale leaks into the next goal.
+		planTicks = 0;
+		loadWait = 0;
+		noPillarPlans = 0;
 		bot.act.stopBreaking();
+	}
+
+	/** Clears the failure counters, the no-progress watchdog and the avoided nodes. */
+	private void clearCounters() {
+		failures = 0;
+		noPath = 0;
+		noProgress = 0;
+		plansSinceProgress = 0;
+		bestH = Double.MAX_VALUE;
+		avoid.clear();
+		hasLastFailNode = false;
+	}
+
+	/**
+	 * Reports failure for the current goal and starts over with clean counters, so that a caller which keeps
+	 * (or later reuses) the same goal instance gets a fresh attempt instead of FAILED on every tick forever.
+	 */
+	private Status giveUp() {
+		search = null;
+		exec = null;
+		clearCounters();
+		return Status.FAILED;
+	}
+
+	/**
+	 * Remembers where a move failed; when the next failure is at the same node it is handed to the planner as
+	 * off-limits, so the replan takes another way instead of producing the identical failing path again.
+	 */
+	private void noteFailedNode(BlockPos node) {
+		// Never rule out a node that is itself the goal.
+		if (node == null || goal.at(node.getX(), node.getY(), node.getZ())) {
+			return;
+		}
+		long key = node.asLong();
+		if (hasLastFailNode && key == lastFailNode) {
+			avoid.add(key);
+		}
+		lastFailNode = key;
+		hasLastFailNode = true;
 	}
 
 	public Goal goal() {
@@ -94,9 +145,13 @@ public final class Nav {
 			}
 			if (result == PathExecutor.Result.FAILED) {
 				info = "replan: " + exec.failReason;
-				if (exec.failReason.startsWith("pillar")) {
-					// Pillaring did not work here; plan the next two paths without it.
+				String reason = exec.failReason;
+				if (reason.startsWith("pillar") || reason.equals("cannot place")) {
+					// Pillaring/bridging did not work here; plan the next two paths without placing blocks.
 					noPillarPlans = 2;
+				} else if (!reason.equals("off path") && !reason.startsWith("no blocks")) {
+					// The move itself is the problem (stuck, lava, timeout...): avoid it if it fails again.
+					noteFailedNode(exec.failedNode());
 				}
 				failures++;
 			} else {
@@ -109,7 +164,7 @@ public final class Nav {
 			exec = null;
 			if (failures > 12) {
 				bot.dbg("nav failed: " + info + " (" + goal + ")");
-				return Status.FAILED;
+				return giveUp();
 			}
 		}
 
@@ -120,15 +175,33 @@ public final class Nav {
 			}
 			planTicks = 0;
 			double h = goal.h(start.getX(), start.getY(), start.getZ());
+			if (Double.isNaN(h) || h >= Double.MAX_VALUE) {
+				// A goal with no target at all (e.g. Goal.any of an empty list): searching would be pointless.
+				bot.dbg("nav failed: goal has no target (" + goal + ")");
+				return giveUp();
+			}
 			if (h < bestH - 2.0) {
 				bestH = h;
 				noProgress = 0;
-			} else if (++noProgress > 6) {
-				bot.dbg("nav failed: no progress toward " + goal + " from " + start.toShortString());
-				return Status.FAILED;
+				plansSinceProgress = 0;
+			} else {
+				// Watchdog: plans that find a complete path are not counted in noProgress (see below), so a
+				// long detour away from the goal is allowed; the total number of plans stays capped.
+				noProgress++;
+				plansSinceProgress++;
+				if (noProgress > 6 || plansSinceProgress > 30) {
+					bot.dbg("nav failed: no progress toward " + goal + " from " + start.toShortString());
+					return giveUp();
+				}
 			}
-			search = new Pathfinder(bot.level(), start, goal, bot.inv.tools(),
-					bot.inv.countThrowaway() > 2 && noPillarPlans-- <= 0, allowBreak, 40000);
+			boolean canPlace = bot.inv.countThrowaway() > 2;
+			if (noPillarPlans > 0) {
+				// Counts down to zero only (it used to run away into the negatives).
+				noPillarPlans--;
+				canPlace = false;
+			}
+			search = new Pathfinder(bot.level(), start, goal, bot.inv.tools(), canPlace, allowBreak, 40000);
+			search.avoid = avoid.isEmpty() ? null : avoid;
 			search.coverCenter = coverCenter;
 			search.coverRadius = coverRadius;
 			ResourceKey<Level> dimension = bot.level().dimension();
@@ -149,16 +222,36 @@ public final class Nav {
 		search = null;
 		// Almost nothing expanded: the surrounding chunks are probably not loaded yet; retry for up to 10 s.
 		if (path == null && expanded <= 4 && ++loadWait < 200) {
+			// These one-tick retries must not feed the no-progress watchdog, which otherwise ended the
+			// 10 s wait after only a handful of ticks.
+			if (noProgress > 0) {
+				noProgress--;
+			}
+			if (plansSinceProgress > 0) {
+				plansSinceProgress--;
+			}
 			return Status.RUNNING;
 		}
 		loadWait = 0;
 		if (path == null || path.size() < 2) {
 			info = "no path to " + goal;
-			if (++failures > 3) {
+			if (!avoid.isEmpty()) {
+				// The avoided nodes may be the only way through: forget them and search once more.
+				avoid.clear();
+				hasLastFailNode = false;
+				return Status.RUNNING;
+			}
+			if (++noPath > 3) {
 				bot.dbg("nav failed: no path from " + start.toShortString() + " to " + goal);
-				return Status.FAILED;
+				return giveUp();
 			}
 			return Status.RUNNING;
+		}
+		noPath = 0;
+		if (execReachesGoal && noProgress > 0) {
+			// A complete path exists, so being further from the goal than before is a detour, not a dead end.
+			// If walking it keeps failing, the execution failure counter ends the attempt instead.
+			noProgress--;
 		}
 		exec = new PathExecutor(bot, path);
 		return Status.RUNNING;

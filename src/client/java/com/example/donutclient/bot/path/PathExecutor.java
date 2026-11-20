@@ -36,6 +36,10 @@ public final class PathExecutor {
 	private int stuck;
 	/** Ticks spent on the current move. */
 	private int moveTicks;
+	/** Ticks spent mining during the current move (not counted in {@link #moveTicks}). */
+	private int mineTicks;
+	/** Ticks spent trying to pillar up during the current move. */
+	private int pillarTicks;
 	/** Failed bridge placements during the current move. */
 	private int placeFails;
 	private Vec3 lastPos;
@@ -50,6 +54,11 @@ public final class PathExecutor {
 	/** Last node of the path. */
 	public BlockPos end() {
 		return path.get(path.size() - 1);
+	}
+
+	/** The node the move in progress is heading for (where a failure happened), or null at the end of the path. */
+	public BlockPos failedNode() {
+		return idx + 1 < path.size() ? path.get(idx + 1) : null;
 	}
 
 	private int flags(BlockPos pos) {
@@ -87,6 +96,8 @@ public final class PathExecutor {
 				if (matches(feet, path.get(i), inWater)) {
 					idx = i;
 					moveTicks = 0;
+					mineTicks = 0;
+					pillarTicks = 0;
 					placeFails = 0;
 					break;
 				}
@@ -157,8 +168,10 @@ public final class PathExecutor {
 			if ((f & Blocks2.BREAK) == 0) {
 				return fail("unbreakable in path");
 			}
-			if (liquidNextTo(pos)) {
-				return fail("liquid next to block");
+			// Only lava aborts. Water next to the block is harmless, and the planner happily routes past
+			// waterlogged blocks and flowing water, so failing on it made the bot replan the same path forever.
+			if (lavaNextTo(pos)) {
+				return fail("lava next to block");
 			}
 			if (!bot.act.inReach(pos)) {
 				// Too far to mine yet: keep moving and try again when closer.
@@ -171,6 +184,12 @@ public final class PathExecutor {
 			}
 			if (inWater) {
 				bot.input.jump = true;
+			}
+			// Mining time has its own, longer limit: three hard blocks by hand legitimately take more than the
+			// 600 ticks allowed for a move, and timing out there only made the bot replan the same dig again.
+			moveTicks--;
+			if (++mineTicks > 1200) {
+				return fail("mine timeout");
 			}
 			bot.act.breakBlock(pos);
 			stuck = 0;
@@ -191,7 +210,9 @@ public final class PathExecutor {
 				walkTo(from, false);
 				return Result.RUNNING;
 			}
-			if (moveTicks > 120) {
+			// Counted apart from moveTicks so that time spent mining the block overhead first does not get a
+			// perfectly good pillar declared stuck (which bans pillaring and bridging for the next plans).
+			if (++pillarTicks > 120) {
 				return fail("pillar stuck");
 			}
 			if (player.onGround()) {
@@ -209,7 +230,7 @@ public final class PathExecutor {
 			if (inWater && dy > 0) {
 				bot.input.jump = true;
 			}
-			return checkStuck(player) ? fail("stuck") : Result.RUNNING;
+			return checkStuck(player, true) ? fail("stuck") : Result.RUNNING;
 		}
 
 		// Bridge: nothing to stand on at the destination, so place a block there first.
@@ -263,17 +284,18 @@ public final class PathExecutor {
 			bot.input.sprint = false;
 			bot.input.sneak = true;
 		}
-		if (checkStuck(player)) {
+		// No jump-tapping beside lava: a hop cancels the sneak that keeps the bot from walking off the edge.
+		if (checkStuck(player, !nearLava)) {
 			return fail("stuck");
 		}
 		return Result.RUNNING;
 	}
 
 	/**
-	 * Tracks lack of movement. After 25 still ticks it starts tapping jump to shake loose; returns true once
-	 * the bot has not moved for more than 80 ticks.
+	 * Tracks lack of movement. After 25 still ticks it starts tapping jump to shake loose (when
+	 * {@code mayJump}); returns true once the bot has not moved for more than 80 ticks.
 	 */
-	private boolean checkStuck(LocalPlayer player) {
+	private boolean checkStuck(LocalPlayer player, boolean mayJump) {
 		Vec3 pos = player.position();
 		if (lastPos == null || pos.distanceToSqr(lastPos) > 0.04) {
 			lastPos = pos;
@@ -281,7 +303,7 @@ public final class PathExecutor {
 			return false;
 		}
 		stuck++;
-		if (stuck > 25 && stuck % 10 < 3 && player.onGround()) {
+		if (mayJump && stuck > 25 && stuck % 10 < 3 && player.onGround()) {
 			bot.input.jump = true;
 		}
 		return stuck > 80;
@@ -322,11 +344,13 @@ public final class PathExecutor {
 		return false;
 	}
 
-	/** Whether any fluid touches the block from above or the sides (mining it would let the fluid in). */
-	private boolean liquidNextTo(BlockPos pos) {
-		for (Direction dir : new Direction[] {Direction.UP, Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST}) {
+	private static final Direction[] FLOW_SIDES = {Direction.UP, Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST};
+
+	/** Whether lava touches the block from above or the sides (mining it would let the lava in). */
+	private boolean lavaNextTo(BlockPos pos) {
+		for (Direction dir : FLOW_SIDES) {
 			BlockState state = bot.level().getBlockState(pos.relative(dir));
-			if (!state.getFluidState().isEmpty()) {
+			if (state.getFluidState().is(FluidTags.LAVA)) {
 				return true;
 			}
 		}

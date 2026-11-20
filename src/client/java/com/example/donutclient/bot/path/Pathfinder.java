@@ -9,10 +9,16 @@ import com.example.donutclient.bot.Blocks2;
 import it.unimi.dsi.fastutil.longs.Long2BooleanOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+import it.unimi.dsi.fastutil.longs.LongSet;
+import it.unimi.dsi.fastutil.objects.Object2IntMap;
 import it.unimi.dsi.fastutil.objects.Reference2FloatOpenHashMap;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Holder;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.enchantment.Enchantment;
+import net.minecraft.world.item.enchantment.Enchantments;
+import net.minecraft.world.item.enchantment.ItemEnchantments;
 import net.minecraft.world.level.block.state.BlockState;
 
 /**
@@ -55,6 +61,8 @@ public final class Pathfinder {
 	public int coverRadius;
 	/** Extra cost for every open-air node (non-zero in the Nether and the End). */
 	public double openCost;
+	/** Optional packed positions the path must not step on (moves that kept failing), or null. */
+	public LongSet avoid;
 
 	private final Long2ObjectOpenHashMap<Node> nodes = new Long2ObjectOpenHashMap<>();
 	private final PriorityQueue<Node> open = new PriorityQueue<>();
@@ -251,7 +259,7 @@ public final class Pathfinder {
 
 	/**
 	 * Estimates the ticks needed to mine a block of the given hardness with the best of the given tools
-	 * (ignoring enchantments, haste, being in water or in the air).
+	 * (Efficiency is counted; haste, being in water or in the air are ignored).
 	 */
 	public static double ticksToBreak(BlockState state, float hardness, List<ItemStack> tools) {
 		if (hardness < 0) {
@@ -265,6 +273,10 @@ public final class Pathfinder {
 		boolean correct = !state.requiresCorrectToolForDrops();
 		for (ItemStack tool : tools) {
 			float toolSpeed = tool.getDestroySpeed(state);
+			if (toolSpeed > 1.0f) {
+				// As in vanilla, Efficiency only helps a tool that is effective on the block.
+				toolSpeed += efficiencyBonus(tool);
+			}
 			boolean toolCorrect = !state.requiresCorrectToolForDrops() || tool.isCorrectToolForDrops(state);
 			if (toolCorrect && !correct) {
 				// The first tool that can actually harvest the block beats anything that cannot.
@@ -276,6 +288,21 @@ public final class Pathfinder {
 		}
 		double progressPerTick = speed / hardness / (correct ? 30.0 : 100.0);
 		return Math.ceil(1.0 / progressPerTick);
+	}
+
+	/** Mining speed added by the Efficiency enchantment on the tool: level squared plus one, 0 without it. */
+	private static float efficiencyBonus(ItemStack tool) {
+		ItemEnchantments enchantments = tool.getEnchantments();
+		if (enchantments.isEmpty()) {
+			return 0;
+		}
+		for (Object2IntMap.Entry<Holder<Enchantment>> entry : enchantments.entrySet()) {
+			if (entry.getKey().is(Enchantments.EFFICIENCY)) {
+				int lvl = entry.getIntValue();
+				return lvl * lvl + 1;
+			}
+		}
+		return 0;
 	}
 
 	/** Cost of mining the block, or {@link #INF} when it must not be mined (unbreakable, liquid next to it...). */
@@ -316,13 +343,21 @@ public final class Pathfinder {
 		return breakCost(x, y, z);
 	}
 
-	/** Whether lava touches the player-sized space at the position (sides, above the head or under the feet). */
+	/**
+	 * Whether lava touches the player-sized space at the position (sides and corners, above the head or under
+	 * the feet). The corners are included because {@link PathExecutor} refuses to walk onto a node with lava
+	 * anywhere in the surrounding 3x3 columns; planning through such a node gave the same failing path again
+	 * and again until navigation gave up.
+	 */
 	private boolean lavaNear(int x, int y, int z) {
-		for (int i = 0; i < 4; i++) {
-			int nx = x + DX[i];
-			int nz = z + DZ[i];
-			if ((fl(nx, y, nz) & Blocks2.LAVA) != 0 || (fl(nx, y + 1, nz) & Blocks2.LAVA) != 0) {
-				return true;
+		for (int dx = -1; dx <= 1; dx++) {
+			for (int dz = -1; dz <= 1; dz++) {
+				if (dx == 0 && dz == 0) {
+					continue;
+				}
+				if ((fl(x + dx, y, z + dz) & Blocks2.LAVA) != 0 || (fl(x + dx, y + 1, z + dz) & Blocks2.LAVA) != 0) {
+					return true;
+				}
 			}
 		}
 		return (fl(x, y + 2, z) & Blocks2.LAVA) != 0 || (fl(x, y - 1, z) & Blocks2.LAVA) != 0;
@@ -365,6 +400,15 @@ public final class Pathfinder {
 			return;
 		}
 		if (y < minY + 1 || y > maxY - 2) {
+			return;
+		}
+		long key = BlockPos.asLong(x, y, z);
+		if (avoid != null && avoid.contains(key)) {
+			return;
+		}
+		// Already expanded: skip the (comparatively expensive) lava and cover checks.
+		Node known = nodes.get(key);
+		if (known != null && known.closed) {
 			return;
 		}
 		if (lavaNear(x, y, z)) {
