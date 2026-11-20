@@ -1,7 +1,26 @@
 # Donut Client
 
-A modular client-side Fabric mod for Minecraft **26.2**: toggleable HUD modules,
-per-module keybinds, and a zoom. Built to be extended one module at a time.
+A client-side Fabric utility mod for Minecraft **26.2** with a click GUI,
+a base finder, through-wall ESP and HUD modules.
+
+Press **Right Shift** in game to open the click GUI. Left click a module to
+toggle it, right click to open its settings. Every module also has a rebindable
+key under *Options → Controls → Donut Client*.
+
+| Category | Module | What it does |
+|---|---|---|
+| World | **Base Finder** | Scores every loaded chunk by its storage, hoppers, spawners, beacons etc. Chunks over *Min Score* are boxed through walls, announced in chat, listed on the HUD and logged to `config/donutclient-bases.csv`. |
+| World | Storage ESP | Outlines chests, barrels, shulkers, ender chests and spawners through walls. |
+| World | Player Alert | Chat message when a player enters or leaves render range. |
+| Render | Player ESP | Boxes, tracers and name/health/distance tags for other players. |
+| Render | Fullbright | Client-side night vision. |
+| Render | Zoom | Hold `C` to zoom. |
+| Movement | Auto Sprint, Auto Walk | Hands-free travel. |
+| HUD | FPS, Coordinates, Keystrokes, Module List | On-screen info. |
+
+The base finder only reads what the server sends to your client. Servers that
+hide block entities or run anti-xray will show fewer (or no) results, and most
+public servers ban this kind of mod — use it where it is allowed.
 
 ## Requirements
 
@@ -12,16 +31,12 @@ per-module keybinds, and a zoom. Built to be extended one module at a time.
 ## First run
 
 ```bash
-# 1. Generate the gradle wrapper jar (only needed once; gradle-wrapper.jar is not committed)
-gradle wrapper --gradle-version 9.4.0        # if you have Gradle installed
-#   …or open the folder in IntelliJ and let it import the project.
-
-# 2. Set up IDE run configs + download Minecraft/Fabric
+# 1. Set up IDE run configs + download Minecraft/Fabric
 ./gradlew genSources            # attaches Minecraft sources (26.x is unobfuscated)
 ./gradlew runClient             # launches a dev client with the mod loaded
 
-# 3. Build a distributable jar
-./gradlew build                 # -> build/libs/donutclient-0.1.0.jar
+# 2. Build a distributable jar
+./gradlew build                 # -> build/libs/donutclient-0.2.0.jar
 ```
 
 Drop the jar into `.minecraft/mods/` together with Fabric API, launched via the
@@ -32,19 +47,22 @@ Fabric Loader profile for 26.2.
 ```
 src/main/      common code (tiny — this mod is client-only)
 src/client/    everything else
-  DonutClientClient.java        entrypoint: wires events → ModuleManager
-  module/Module.java         base class: toggle, keybind, onTick, onRenderHud
-  module/ModuleManager.java  registry + event dispatch + keybinds
-  modules/*.java             the features (FPS, Coordinates, Keystrokes, Zoom)
+  DonutClientClient.java     entrypoint: wires events → ModuleManager
+  module/                    Module base class, categories, ModuleManager
+  modules/*.java             the features
+  setting/                   BoolSetting / NumSetting shown in the click GUI
+  gui/ClickGuiScreen.java    the click GUI
+  render/World.java          through-wall boxes, lines and text (vanilla Gizmos)
   hud/HudContext.java        thin facade over Minecraft's HUD drawing API
-  mixin/GameRendererMixin    FOV hook for Zoom (the only vanilla patch)
-  config/ClientConfig.java   saves enabled state to config/donutclient.json
+  mixin/                     CameraMixin (zoom FOV), LevelRendererMixin (world draw hook)
+  config/ClientConfig.java   saves module state + settings to config/donutclient.json
 ```
 
 ## Adding a module
 
 1. Create `modules/MyThingModule.java` extending `Module`.
-2. Override `onTick()` and/or `onRenderHud(HudContext)`.
+2. Override `onTick()`, `onRenderHud(HudContext)` and/or `onRenderWorld(float)`;
+   declare settings with `add(new BoolSetting(...))`.
 3. Add `register(new MyThingModule());` in `ModuleManager.registerDefaults()`.
 4. Add a `key.donutclient.my_thing` line to `assets/donutclient/lang/en_us.json`.
 
@@ -56,14 +74,12 @@ Keybinds show up automatically under *Options → Controls → DonutClient Modul
   names are Mojang's (`Minecraft`, `GuiGraphics…`, `KeyMapping`, `ResourceLocation`).
 - The Loom plugin id is `net.fabricmc.fabric-loom` (not `fabric-loom`), and mod
   deps use `implementation`, not `modImplementation`.
-- The rendering pipeline was rewritten in 26.1. If `HudContext` fails to compile,
-  the method names on `GuiGraphicsExtractor` moved — that's the one file to fix.
+- The rendering pipeline was rewritten in 26.1. HUD drawing goes through
+  `HudContext`, so that is the one file to fix if `GuiGraphicsExtractor` changes.
 - Fabric docs: https://docs.fabricmc.net/develop/ · Versions: https://fabricmc.net/develop
 
 ## Roadmap ideas
 
-- Click GUI (`Screen` subclass) to toggle modules with the mouse — bind to Right Shift
 - Draggable HUD positions saved in config
-- Armor/potion status HUD, CPS counter, reach display, server ping
-- Fullbright (gamma override), hit-colour/particle tweaks
-- Discord Rich Presence, cosmetics (capes via a custom `PlayerRenderer` layer)
+- Waypoints for logged bases, shown in-world after a restart
+- Armor/potion status HUD, server ping

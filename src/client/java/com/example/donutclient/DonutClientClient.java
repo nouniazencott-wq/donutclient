@@ -14,6 +14,7 @@ import net.fabricmc.fabric.api.client.rendering.v1.hud.VanillaHudElements;
  *
  *   ClientTickEvents.END_CLIENT_TICK  -> ModuleManager.onClientTick (keybinds + per-tick logic)
  *   HudElementRegistry                -> ModuleManager.onRenderHud  (drawing)
+ *   LevelRendererMixin                -> ModuleManager.onRenderWorld (3D overlays)
  *   ClientLifecycleEvents.CLIENT_STOPPING -> save config
  */
 public class DonutClientClient implements ClientModInitializer {
@@ -36,7 +37,7 @@ public class DonutClientClient implements ClientModInitializer {
                 DonutClient.id("modules"),
                 (graphics, delta) -> {
                     var mc = net.minecraft.client.Minecraft.getInstance();
-                    if (mc.level == null || mc.options.hideGui) return;
+                    if (mc.level == null || mc.gui.hud.isHidden()) return;
                     if (mc.getDebugOverlay().showDebugScreen()) return; // F3 open: get out of the way
                     manager.onRenderHud(new HudContext(graphics, delta));
                 }

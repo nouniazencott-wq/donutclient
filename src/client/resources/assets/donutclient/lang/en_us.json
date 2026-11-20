@@ -1,7 +1,17 @@
 {
-  "key.categories.donutclient.modules": "Donut Client Modules",
+  "key.category.donutclient.modules": "Donut Client",
+  "key.categories.donutclient.modules": "Donut Client",
+  "key.donutclient.click_gui": "Open Click GUI",
+  "key.donutclient.base_finder": "Toggle Base Finder",
+  "key.donutclient.storage_esp": "Toggle Storage ESP",
+  "key.donutclient.player_alert": "Toggle Player Alert",
+  "key.donutclient.player_esp": "Toggle Player ESP",
+  "key.donutclient.fullbright": "Toggle Fullbright",
+  "key.donutclient.zoom": "Zoom (hold)",
+  "key.donutclient.auto_sprint": "Toggle Auto Sprint",
+  "key.donutclient.auto_walk": "Toggle Auto Walk",
   "key.donutclient.fps": "Toggle FPS",
   "key.donutclient.coordinates": "Toggle Coordinates",
   "key.donutclient.keystrokes": "Toggle Keystrokes",
-  "key.donutclient.zoom": "Zoom (hold)"
+  "key.donutclient.module_list": "Toggle Module List"
 }

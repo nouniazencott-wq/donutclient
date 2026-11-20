@@ -3,7 +3,8 @@
   "package": "com.example.donutclient.mixin",
   "compatibilityLevel": "JAVA_25",
   "client": [
-    "GameRendererMixin"
+    "CameraMixin",
+    "LevelRendererMixin"
   ],
   "injectors": {
     "defaultRequire": 1

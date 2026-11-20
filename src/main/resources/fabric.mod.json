@@ -3,7 +3,7 @@
   "id": "donutclient",
   "version": "${version}",
   "name": "Donut Client",
-  "description": "A modular client-side enhancement mod: HUD modules, keybinds, zoom.",
+  "description": "Utility client: base finder, storage and player ESP, click GUI, HUD modules.",
   "authors": ["You"],
   "contact": {
     "homepage": "https://example.com/",

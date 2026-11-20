@@ -23,8 +23,8 @@ public class KeystrokesModule extends Module {
     public void onRenderHud(HudContext ctx) {
         Options o = mc.options;
 
-        // Anchor: bottom-left, above the hotbar area.
-        int baseX = 8;
+        // Anchor: bottom-right, clear of the chat box.
+        int baseX = ctx.screenWidth - 8 - (SIZE * 3 + GAP * 2);
         int baseY = ctx.screenHeight - 8 - (SIZE * 3 + GAP * 2);
 
         // Row 1: W

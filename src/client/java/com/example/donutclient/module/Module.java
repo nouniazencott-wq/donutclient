@@ -2,7 +2,12 @@ package com.example.donutclient.module;
 
 import com.example.donutclient.DonutClient;
 import com.example.donutclient.hud.HudContext;
+import com.example.donutclient.setting.Setting;
 import net.minecraft.client.Minecraft;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 
 /**
  * Base class for every feature in the client.
@@ -11,6 +16,7 @@ import net.minecraft.client.Minecraft;
  *  - onEnable / onDisable       state transitions
  *  - onTick                     every client tick while enabled
  *  - onRenderHud                every HUD frame while enabled
+ *  - onRenderWorld              every world frame while enabled (draw with render.World)
  *
  * Keep modules small and single-purpose. If a module needs to change vanilla
  * behaviour that has no event, add a Mixin in the mixin package and have the
@@ -23,6 +29,7 @@ public abstract class Module {
     private final String description;
     private final Category category;
     private boolean enabled;
+    private final List<Setting> settings = new ArrayList<>();
 
     /** Default key (GLFW keycode) or -1 for unbound. Persisted in config. */
     private int keyCode;
@@ -62,6 +69,20 @@ public abstract class Module {
 
     /** Called every HUD frame while enabled (only when a world is loaded). */
     public void onRenderHud(HudContext ctx) {}
+
+    /** Called every world frame while enabled. Draw 3D overlays via {@link com.example.donutclient.render.World}. */
+    public void onRenderWorld(float partialTick) {}
+
+    // ---- settings --------------------------------------------------------
+
+    protected <T extends Setting> T add(T setting) {
+        settings.add(setting);
+        return setting;
+    }
+
+    public List<Setting> getSettings() {
+        return Collections.unmodifiableList(settings);
+    }
 
     // ---- metadata --------------------------------------------------------
 

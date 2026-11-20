@@ -1,9 +1,10 @@
 package com.example.donutclient.module;
 
 public enum Category {
-    HUD("HUD"),
+    WORLD("World"),
     RENDER("Render"),
-    MISC("Misc");
+    MOVEMENT("Movement"),
+    HUD("HUD");
 
     public final String displayName;
 
