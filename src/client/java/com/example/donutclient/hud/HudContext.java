@@ -31,7 +31,7 @@ public final class HudContext {
 
     /** Draw text with a drop shadow. Color is ARGB (0xAARRGGBB). */
     public void text(String s, int x, int y, int argb) {
-        graphics.drawString(font, s, x, y, argb);
+        graphics.text(font, s, x, y, argb);
     }
 
     /** Solid rectangle. Color is ARGB. */

@@ -14,14 +14,15 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 
 /**
- * Persists which modules are enabled to <game dir>/config/donutclient.json.
+ * Persists which modules are enabled (plus any per-module settings) to <game dir>/config/donutclient.json.
  *
  * Keybinds are NOT stored here — Minecraft already saves those in options.txt
  * because we registered them as real KeyMappings.
  *
  * Format:
  * {
- *   "modules": { "fps": true, "coordinates": true, "keystrokes": false, "zoom": false }
+ *   "modules": { "fps": true, "coordinates": true, "keystrokes": false, "zoom": false },
+ *   "settings": { "ore_esp": { "ores": { "diamond": true, ... }, "tracers": true, "chunkRadius": 4 } }
  * }
  */
 public final class ClientConfig {
@@ -39,9 +40,13 @@ public final class ClientConfig {
         try {
             JsonObject root = JsonParser.parseString(Files.readString(FILE)).getAsJsonObject();
             JsonObject modules = root.has("modules") ? root.getAsJsonObject("modules") : new JsonObject();
+            JsonObject settings = root.has("settings") ? root.getAsJsonObject("settings") : new JsonObject();
             for (Module m : ModuleManager.get().all()) {
                 if (modules.has(m.getId())) {
                     m.setEnabled(modules.get(m.getId()).getAsBoolean());
+                }
+                if (settings.has(m.getId())) {
+                    m.readSettings(settings.getAsJsonObject(m.getId()));
                 }
             }
             DonutClient.LOGGER.info("Loaded config from {}", FILE);
@@ -52,11 +57,16 @@ public final class ClientConfig {
 
     public static void save() {
         JsonObject modules = new JsonObject();
+        JsonObject settings = new JsonObject();
         for (Module m : ModuleManager.get().all()) {
             modules.addProperty(m.getId(), m.isEnabled());
+            JsonObject own = new JsonObject();
+            m.writeSettings(own);
+            if (!own.isEmpty()) settings.add(m.getId(), own);
         }
         JsonObject root = new JsonObject();
         root.add("modules", modules);
+        root.add("settings", settings);
         try {
             Files.createDirectories(FILE.getParent());
             Files.writeString(FILE, GSON.toJson(root));
