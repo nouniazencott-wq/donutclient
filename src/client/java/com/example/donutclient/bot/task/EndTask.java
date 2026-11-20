@@ -616,6 +616,10 @@ public final class EndTask extends Task {
             waitGoal = Goal.block(new BlockPos(8, y - 3, 0));
         }
         Nav.Status status = bot.nav.goTo(waitGoal);
+        if (status == Nav.Status.DONE) {
+            // Standing here is intended, not a stall: keep the plan's stuck detector quiet.
+            bot.heartbeat = bot.tick;
+        }
         if (status == Nav.Status.DONE && dragon != null) {
             bot.inv.holdWeapon();
             bot.act.lookAt(dragon.getBoundingBox().getCenter());

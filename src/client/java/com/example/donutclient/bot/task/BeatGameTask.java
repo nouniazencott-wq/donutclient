@@ -409,7 +409,9 @@ public final class BeatGameTask extends Task {
 			// escalation: every further stall on the same stage doubles the walk (24, 48, 96 blocks)
 			stallCount = current == stallStage ? stallCount + 1 : 0;
 			stallStage = current;
-			unstickDist = 24 << Math.min(stallCount, 2);
+			// Only walk further in the overworld: in the Nether and the End a long blind walk leads over lava
+			// seas and the void.
+			unstickDist = 24 << (inOverworld() ? Math.min(stallCount, 2) : 0);
 			// pseudo-random direction derived from the tick counter (0 .. 2*pi)
 			unstickAngle = (bot.tick % 628) / 100.0;
 			unstickTries = 0;

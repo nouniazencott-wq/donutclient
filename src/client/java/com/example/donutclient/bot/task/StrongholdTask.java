@@ -46,6 +46,8 @@ public final class StrongholdTask extends Task {
     private boolean fromMemory;
     /** True while {@link #goal} leads to a partly visible portal instead of a spiral search point. */
     private boolean towardFrames;
+    /** Failed walks towards partially visible frames; after 3 the spiral search is left alone. */
+    private int towardFails;
     /** Ticks spent in FILL with every frame filled but no portal block in the middle. */
     private int waitTicks;
     /** Ticks spent walking straight at the portal in ENTER without being teleported. */
@@ -166,7 +168,7 @@ public final class StrongholdTask extends Task {
                         waitTicks = 0;
                         return false;
                     }
-                    if (!frames.isEmpty() && !towardFrames) {
+                    if (!frames.isEmpty() && !towardFrames && towardFails < 3) {
                         // Part of the portal is already visible (the rest is in chunks that are not
                         // loaded yet): head for it instead of continuing the blind spiral.
                         BlockPos seen = frames.get(0);
@@ -200,7 +202,11 @@ public final class StrongholdTask extends Task {
                     goal = Goal.xz(place.getX() + (int) (Math.cos(angle) * 48.0 * ring), place.getZ() + (int) (Math.sin(angle) * 48.0 * ring), 8.0);
                     searchIdx++;
                 }
-                if (bot.nav.goTo(goal) != Nav.Status.RUNNING) {
+                Nav.Status searchStatus = bot.nav.goTo(goal);
+                if (searchStatus != Nav.Status.RUNNING) {
+                    if (towardFrames && searchStatus == Nav.Status.FAILED) {
+                        towardFails++;
+                    }
                     goal = null;
                     towardFrames = false;
                 }
