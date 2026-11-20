@@ -121,6 +121,8 @@ public final class Reflex {
     private int shelterTicks;
     /** Ticks since the current shelter was started; unlike {@link #shelterTicks} never held back at night. */
     private int shelterTotal;
+    /** Ticks in a row during which the shelter had an open cell; reset whenever it is fully closed. */
+    private int shelterOpenTicks;
     private int shelterCooldown;
     /** True if the shelter was built to wait out the night rather than to heal. */
     private boolean shelterNight;
@@ -169,6 +171,7 @@ public final class Reflex {
             shelterAt = bot.feet();
             shelterTicks = 0;
             shelterTotal = 0;
+            shelterOpenTicks = 0;
             release();
             bot.say(hurt ? "Taking cover to heal."
                     : "Night is falling and I have no armour: waiting it out in a shelter.");
@@ -218,9 +221,10 @@ public final class Reflex {
                 if (eatTicks > 0) {
                     release();
                 }
-                // A shelter that cannot be closed (out of blocks, or a night shelter still open after 15 seconds)
-                // protects nothing: give it up instead of standing in the open until morning.
-                if (bot.inv.countThrowaway() == 0 || (shelterNight && shelterTotal > 300)) {
+                // A shelter that cannot be closed (out of blocks, or a night shelter that has been open for 15
+                // seconds in a row) protects nothing: give it up instead of standing in the open until morning.
+                // Counted per opening, so a hole blown into a finished shelter is simply patched.
+                if (bot.inv.countThrowaway() == 0 || (shelterNight && ++shelterOpenTicks > 300)) {
                     shelterAt = null;
                     shelterCooldown = 1200;
                     return false;
@@ -235,6 +239,7 @@ public final class Reflex {
                 return true;
             }
         }
+        shelterOpenTicks = 0;
         if (eatTicks > 0) {
             eatTicks++;
             if ((!player.isUsingItem() && eatTicks > 8) || eatTicks > 60) {
@@ -325,8 +330,14 @@ public final class Reflex {
                 return false;
             }
             if ((body & (Blocks2.PASS | Blocks2.WATER)) == 0) {
-                // A wall or step: the bot stops or jumps there, it cannot fall.
-                return true;
+                // Blocked. Further out that is fine (the bot stops there, it cannot fall); right in front it only
+                // counts as a way out if it is a one-high step the bot can jump onto, not a wall to run into.
+                if (step == 2) {
+                    return true;
+                }
+                BlockPos up = cell.above();
+                return (Blocks2.flags(level, up, level.getBlockState(up)) & Blocks2.PASS) != 0
+                        && (Blocks2.flags(level, up.above(), level.getBlockState(up.above())) & Blocks2.PASS) != 0;
             }
             boolean floor = false;
             for (int down = 1; down <= 3 && !floor; down++) {
