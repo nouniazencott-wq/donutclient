@@ -145,16 +145,16 @@ public final class Reflex {
         }
         ClientLevel level = bot.level();
         boolean overworld = level.dimension() == Level.OVERWORLD;
-        boolean night = overworld && level.isDarkOutside() && player.getArmorValue() < 8
+        boolean nightRisk = overworld && level.isDarkOutside() && player.getArmorValue() < 8
                 && level.canSeeSky(bot.feet().above());
         if (shelterAt == null) {
             if (shelterCooldown > 0 || !player.onGround() || player.isInWater() || level.dimension() == Level.END
                     || bot.inv.countThrowaway() < 12 || !bot.inv.menuIsInventory()) {
                 return false;
             }
-            double lowHealth = overworld ? 9.0 : 13.0;
-            boolean hurt = player.getHealth() <= lowHealth && (nearestHostile(24.0) != null || player.isOnFire());
-            if (!hurt && !night) {
+            double limit = overworld ? 9.0 : 13.0;
+            boolean hurt = player.getHealth() <= limit && (nearestHostile(24.0) != null || player.isOnFire());
+            if (!hurt && !nightRisk) {
                 return false;
             }
             shelterNight = !hurt;
@@ -167,7 +167,7 @@ public final class Reflex {
         if (shelterNight) {
             bot.setStatus("sheltering until morning");
             // While it is still dark keep the timer below the give-up limit.
-            if (night || level.isDarkOutside()) {
+            if (nightRisk || level.isDarkOutside()) {
                 shelterTicks = Math.min(shelterTicks, 100);
             }
         }
@@ -175,20 +175,20 @@ public final class Reflex {
         bot.heartbeat = bot.tick;
         bot.act.stopBreaking();
         bot.nav.reset();
-        boolean done = (player.getHealth() >= 17.0F
+        boolean healed = (player.getHealth() >= 17.0F
                 || (player.getHealth() >= 12.0F && bot.inv.find(Reflex::isGoodFood) < 0))
                 && (!shelterNight || !level.isDarkOutside());
-        if (done || shelterTicks > 900 || (!bot.feet().equals(shelterAt) && shelterTicks > 40)) {
+        if (healed || shelterTicks > 900 || (!bot.feet().equals(shelterAt) && shelterTicks > 40)) {
             shelterAt = null;
             shelterCooldown = 200;
             release();
             return false;
         }
         // Stand in the middle of the cell so the walls can be placed around the bot.
-        double centerX = shelterAt.getX() + 0.5;
-        double centerZ = shelterAt.getZ() + 0.5;
-        if (Math.abs(player.getX() - centerX) > 0.18 || Math.abs(player.getZ() - centerZ) > 0.18) {
-            bot.act.faceXZ(centerX, centerZ);
+        double cx = shelterAt.getX() + 0.5;
+        double cz = shelterAt.getZ() + 0.5;
+        if (Math.abs(player.getX() - cx) > 0.18 || Math.abs(player.getZ() - cz) > 0.18) {
+            bot.act.faceXZ(cx, cz);
             bot.input.forward = true;
             bot.input.sneak = true;
             return true;
@@ -272,25 +272,25 @@ public final class Reflex {
             return true;
         }
 
-        // After a water landing: pick the water source back up with the empty bucket.
+        // After a water landing: pick the water src back up with the empty bucket.
         if (waterLanding != null) {
             if (++waterLandingTicks > 100 || bot.inv.count(Items.BUCKET) == 0) {
                 waterLanding = null;
             } else if (player.onGround() || player.isInWater()) {
-                BlockPos source = null;
+                BlockPos src = null;
                 for (BlockPos pos : BlockPos.betweenClosed(bot.feet().offset(-2, -2, -2), bot.feet().offset(2, 1, 2))) {
                     FluidState fluid = bot.level().getFluidState(pos);
                     if (fluid.isSource() && fluid.is(FluidTags.WATER)) {
-                        source = pos.immutable();
+                        src = pos.immutable();
                         break;
                     }
                 }
-                if (source == null) {
+                if (src == null) {
                     if (waterLandingTicks > 20) {
                         waterLanding = null;
                     }
                 } else if (bot.inv.hold(Items.BUCKET)) {
-                    bot.act.lookAt(Vec3.atCenterOf(source));
+                    bot.act.lookAt(Vec3.atCenterOf(src));
                     bot.act.useItem();
                 }
                 return true;
@@ -359,24 +359,24 @@ public final class Reflex {
         }
 
         // Melee self-defence against the nearest visible hostile.
-        LivingEntity foe = combatEnabled ? nearestHostile(guardRange) : null;
-        if (foe != null && (foe.getId() == ignoredId || !player.hasLineOfSight(foe))) {
-            foe = null;
+        LivingEntity threat = combatEnabled ? nearestHostile(guardRange) : null;
+        if (threat != null && (threat.getId() == ignoredId || !player.hasLineOfSight(threat))) {
+            threat = null;
         }
-        if (foe != null && bot.inv.menuIsInventory()) {
+        if (threat != null && bot.inv.menuIsInventory()) {
             if (eatTicks > 0) {
                 release();
             }
-            if (foe.getId() != engagedId) {
-                engagedId = foe.getId();
+            if (threat.getId() != engagedId) {
+                engagedId = threat.getId();
                 engagedTicks = 0;
             }
-            if (foe.hurtTime > 0) {
+            if (threat.hurtTime > 0) {
                 engagedTicks = 0;
             }
             // 12 seconds without landing a hit: it is out of reach, ignore it for a while.
             if (++engagedTicks > 240) {
-                ignoredId = foe.getId();
+                ignoredId = threat.getId();
                 ignoreTicks = 300;
                 release();
                 return false;
@@ -384,12 +384,12 @@ public final class Reflex {
             bot.act.stopBreaking();
             bot.nav.reset();
             bot.inv.holdWeapon();
-            bot.act.lookAt(foe.getBoundingBox().getCenter());
+            bot.act.lookAt(threat.getBoundingBox().getCenter());
             raiseShield();
-            double dist = Math.sqrt(foe.getBoundingBox().distanceToSqr(player.getEyePosition()));
+            double dist = Math.sqrt(threat.getBoundingBox().distanceToSqr(player.getEyePosition()));
             if (dist < 3.0 && bot.act.attackReady()) {
-                bot.act.attack(foe);
-            } else if (dist > 2.4 && player.onGround() && safeAhead(foe)) {
+                bot.act.attack(threat);
+            } else if (dist > 2.4 && player.onGround() && safeAhead(threat)) {
                 bot.input.forward = true;
             }
             if (player.isInWater()) {
@@ -416,14 +416,14 @@ public final class Reflex {
         boolean hungry = food <= 12 || (player.getHealth() <= 12.0F && food < 20);
         if (eatTicks > 0) {
             eatTicks++;
-            boolean notEating = !player.isUsingItem() && eatTicks > 8;
-            if (notEating || eatTicks > 60 || foe != null) {
+            boolean finished = !player.isUsingItem() && eatTicks > 8;
+            if (finished || eatTicks > 60 || threat != null) {
                 release();
                 return false;
             }
             return true;
         }
-        if (hungry && foe == null && (sheltered || nearestHostile(6.0) == null) && bot.inv.menuIsInventory()
+        if (hungry && threat == null && (sheltered || nearestHostile(6.0) == null) && bot.inv.menuIsInventory()
                 && !player.isInWater()) {
             int slot = bot.inv.find(Reflex::isGoodFood);
             if (slot >= 0 && bot.inv.hold(slot)) {

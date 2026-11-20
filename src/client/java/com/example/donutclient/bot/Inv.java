@@ -134,10 +134,10 @@ public final class Inv {
         if (!menuIsInventory()) {
             return false;
         }
-        int hotbar = pickHotbarSlot();
+        int target = pickHotbarSlot();
         // For slots 9-35 the inventory index equals the inventory-menu slot id.
-        mc.gameMode.handleContainerInput(p().inventoryMenu.containerId, slot, hotbar, ContainerInput.SWAP, p());
-        inventory.setSelectedSlot(hotbar);
+        mc.gameMode.handleContainerInput(p().inventoryMenu.containerId, slot, target, ContainerInput.SWAP, p());
+        inventory.setSelectedSlot(target);
         return true;
     }
 
@@ -207,42 +207,42 @@ public final class Inv {
         if (!menuIsInventory() || freeSlots() >= 4) {
             return;
         }
-        int slot = -1;
-        for (int i = 9; i < 36 && slot < 0; i++) {
+        int victim = -1;
+        for (int i = 9; i < 36 && victim < 0; i++) {
             ItemStack stack = get(i);
             if (!stack.isEmpty() && !keep(stack) && !THROWAWAY.contains(stack.getItem())) {
-                slot = i;
+                victim = i;
             }
         }
-        for (int i = 0; i < 9 && slot < 0; i++) {
+        for (int i = 0; i < 9 && victim < 0; i++) {
             ItemStack stack = get(i);
             if (!stack.isEmpty() && !keep(stack) && !THROWAWAY.contains(stack.getItem())) {
-                slot = i;
+                victim = i;
             }
         }
-        if (slot < 0 && countThrowaway() > 320) {
+        if (victim < 0 && countThrowaway() > 320) {
             // Surplus building blocks, least valuable first.
-            Item[] surplus = {Items.NETHERRACK, Items.DIRT, Items.GRANITE, Items.DIORITE, Items.ANDESITE, Items.TUFF,
+            Item[] order = {Items.NETHERRACK, Items.DIRT, Items.GRANITE, Items.DIORITE, Items.ANDESITE, Items.TUFF,
                     Items.DEEPSLATE, Items.COBBLED_DEEPSLATE, Items.BLACKSTONE, Items.BASALT, Items.COBBLESTONE};
-            for (Item item : surplus) {
+            for (Item item : order) {
                 if (item == preferBlock) {
                     continue;
                 }
-                for (int i = 35; i >= 0 && slot < 0; i--) {
+                for (int i = 35; i >= 0 && victim < 0; i--) {
                     if (get(i).is(item)) {
-                        slot = i;
+                        victim = i;
                     }
                 }
-                if (slot >= 0) {
+                if (victim >= 0) {
                     break;
                 }
             }
         }
-        if (slot < 0) {
+        if (victim < 0) {
             return;
         }
-        // Inventory-menu slot ids: hotbar 0-8 lives at 36-44, main inventory 9-35 maps one to one.
-        int menuSlot = slot < 9 ? 36 + slot : slot;
+        // Inventory-menu victim ids: hotbar 0-8 lives at 36-44, main inventory 9-35 maps one to one.
+        int menuSlot = victim < 9 ? 36 + victim : victim;
         mc.gameMode.handleContainerInput(p().inventoryMenu.containerId, menuSlot, 1, ContainerInput.THROW, p());
     }
 

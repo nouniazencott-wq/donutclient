@@ -23,7 +23,8 @@ import net.minecraft.world.phys.Vec3;
  * Fights dangerous mobs from a small shelter instead of chasing them: walks to a spot, builds cover around
  * itself, hits anything that comes within reach, and steps out now and then to collect the drops.
  * <ul>
- *   <li>{@link Mode#BOX}: a 1x1 pillar-box with a gap at eye level on no side (blazes cannot shoot in).</li>
+ *   <li>{@link Mode#BOX}: fully enclosed 1x1 cell (four walls two high plus a cap) so blaze fireballs cannot
+ *       get in; attacks are sent straight at entities within 3 blocks.</li>
  *   <li>{@link Mode#ROOF}: a wall on the east plus a 3x3 roof two blocks up, so endermen (3 tall) cannot
  *       reach the bot while it stares them into attacking.</li>
  * </ul>

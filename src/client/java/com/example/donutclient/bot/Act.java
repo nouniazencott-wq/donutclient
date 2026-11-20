@@ -105,47 +105,47 @@ public final class Act {
     }
 
     /** Places a throwaway block at the position. See {@link #placeHeld}. */
-    public boolean placeBlock(BlockPos pos) {
-        return placeHeld(pos, true);
+    public boolean placeBlock(BlockPos target) {
+        return placeHeld(target, true);
     }
 
     /**
      * Places a block at the position by clicking a solid neighbour (call every tick until it returns true).
      *
-     * @param selectThrowaway true to switch to a throwaway block first, false to place whatever is in hand
+     * @param throwaway true to switch to a throwaway block first, false to place whatever is in hand
      * @return true once the position is occupied by a non-replaceable block
      */
-    public boolean placeHeld(BlockPos pos, boolean selectThrowaway) {
-        BlockState state = mc.level.getBlockState(pos);
+    public boolean placeHeld(BlockPos target, boolean throwaway) {
+        BlockState state = mc.level.getBlockState(target);
         if (!state.canBeReplaced()) {
             return true;
         }
         if (bot.tick - lastPlaceTick < (fastPlace ? 2 : 4)) {
             return false;
         }
-        if (selectThrowaway && !bot.inv.holdThrowaway()) {
+        if (throwaway && !bot.inv.holdThrowaway()) {
             return false;
         }
-        Direction[] sides = {Direction.DOWN, Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST,
+        Direction[] order = {Direction.DOWN, Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST,
                 Direction.UP};
         // First pass skips neighbours that would open a screen when clicked (chests, furnaces, ...);
         // the second pass accepts them as a last resort.
         for (int pass = 0; pass < 2; pass++) {
-            for (Direction side : sides) {
-                BlockPos neighbour = pos.relative(side);
-                BlockState support = mc.level.getBlockState(neighbour);
+            for (Direction side : order) {
+                BlockPos ref = target.relative(side);
+                BlockState support = mc.level.getBlockState(ref);
                 if (support.canBeReplaced() || support.isAir()) {
                     continue;
                 }
-                boolean interactive = support.getMenuProvider(mc.level, neighbour) != null || support.hasBlockEntity();
+                boolean interactive = support.getMenuProvider(mc.level, ref) != null || support.hasBlockEntity();
                 if (interactive && pass == 0) {
                     continue;
                 }
                 Direction face = side.getOpposite();
-                Vec3 hit = Vec3.atCenterOf(neighbour)
+                Vec3 hit = Vec3.atCenterOf(ref)
                         .add(face.getStepX() * 0.5, face.getStepY() * 0.5, face.getStepZ() * 0.5);
                 lookAt(hit);
-                mc.gameMode.useItemOn(p(), InteractionHand.MAIN_HAND, new BlockHitResult(hit, face, neighbour, false));
+                mc.gameMode.useItemOn(p(), InteractionHand.MAIN_HAND, new BlockHitResult(hit, face, ref, false));
                 p().swing(InteractionHand.MAIN_HAND);
                 lastPlaceTick = bot.tick;
                 return false;
