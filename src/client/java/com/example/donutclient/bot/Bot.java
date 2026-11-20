@@ -4,6 +4,7 @@ import com.example.donutclient.DonutClient;
 import com.example.donutclient.bot.path.Goal;
 import com.example.donutclient.bot.path.Nav;
 import com.example.donutclient.bot.task.BeatGameTask;
+import com.example.donutclient.bot.task.PortalTask;
 import com.example.donutclient.bot.task.Task;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.DeathScreen;
@@ -126,6 +127,7 @@ public final class Bot {
     public void onWorldLeft() {
         stop();
         memory.reset();
+        PortalTask.forgetSite();
         deaths = 0;
         lastDim = null;
     }

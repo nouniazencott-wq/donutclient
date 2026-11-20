@@ -128,9 +128,12 @@ public final class NetherGatherTask extends Task {
                     travel = new DeepTravelTask(bot, place.getX(), place.getZ(), camps > 0 ? 6.0 : 16.0);
                 }
                 if (travel.tick()) {
+                    // after a blind leg there is nothing to search here: run the locate query again. The same
+                    // goes for a trip that gave up far from the target - searching "the fortress" from there
+                    // would only walk rings around the wrong place.
+                    boolean gaveUp = travel.failed && travel.remaining() > 64;
                     travel = null;
-                    // after a blind leg there is nothing to search here: run the locate query again
-                    state = blind ? S.LOCATE : S.SEARCH;
+                    state = blind || gaveUp ? S.LOCATE : S.SEARCH;
                     blind = false;
                     goal = null;
                 }

@@ -88,6 +88,11 @@ public final class PortalTask extends Task {
      * the frame up again instead of starting a new one.
      */
     private static BlockPos resumeSite;
+
+    /** Forgets the unfinished frame; called when the player leaves the world, where it means nothing any more. */
+    public static void forgetSite() {
+        resumeSite = null;
+    }
     private static long resumeTick;
     private static long lastNeedSay = -100000L;
 
