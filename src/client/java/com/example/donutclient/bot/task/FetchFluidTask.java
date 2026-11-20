@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Set;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.tags.TagKey;
 import net.minecraft.world.item.Item;
@@ -43,6 +44,11 @@ public final class FetchFluidTask extends Task {
     private double heading = -1.0;
     private long lastScan = -1000L;
     private List<Spot> spots = new ArrayList<>();
+    /** Consecutive scans that found no usable source. */
+    private int emptyScans;
+    /** Ticks spent on the current exploration leg, and the number of legs walked so far. */
+    private int exploreTicks;
+    private int legs;
     public boolean failed;
 
     /** A fluid source block together with the feet position to scoop it from. */
@@ -67,6 +73,7 @@ public final class FetchFluidTask extends Task {
                 && state.getCollisionShape(EmptyBlockGetter.INSTANCE, BlockPos.ZERO).isEmpty(), 8, 3000);
         List<Spot> result = new ArrayList<>();
         ClientLevel level = bot.level();
+        boolean lava = fluid == FluidTags.LAVA;
         for (BlockPos source : sources) {
             if (around != null && source.distSqr(around) > (double) radius * (double) radius) {
                 continue;
@@ -99,6 +106,11 @@ public final class FetchFluidTask extends Task {
                         if (!level.getBlockState(floor.above()).isAir() || !level.getBlockState(floor.above(2)).isAir()) {
                             continue;
                         }
+                        if (lava && lavaTouches(level, floor.above())) {
+                            // lava at body height right next to the standing place (a lava fall, a higher
+                            // pool): one step or one flow update away from burning
+                            continue;
+                        }
                         bestCost = cost;
                         stand = floor.above();
                     }
@@ -112,6 +124,17 @@ public final class FetchFluidTask extends Task {
             }
         }
         return result;
+    }
+
+    /** True if lava is horizontally adjacent to a player standing with its feet at {@code stand}, or right above it. */
+    private static boolean lavaTouches(ClientLevel level, BlockPos stand) {
+        for (Direction dir : Direction.Plane.HORIZONTAL) {
+            BlockPos side = stand.relative(dir);
+            if (level.getFluidState(side).is(FluidTags.LAVA) || level.getFluidState(side.above()).is(FluidTags.LAVA)) {
+                return true;
+            }
+        }
+        return level.getFluidState(stand.above(2)).is(FluidTags.LAVA);
     }
 
     @Override
@@ -147,11 +170,19 @@ public final class FetchFluidTask extends Task {
                 lastScan = bot.tick;
                 spots = findSpots(bot, fluid, around, aroundRadius, 40);
                 spots.removeIf(s -> bad.contains(s.source) || bot.memory.dangerous(s.stand));
+                emptyScans = spots.isEmpty() ? emptyScans + 1 : 0;
             }
             if (spots.isEmpty()) {
                 if (around != null) {
-                    failed = true;
-                    return true;
+                    // Only give up after three scans in a row (about 12 s) found nothing: a single empty
+                    // result can simply mean the chunks around the bot are not loaded yet, or that the scan
+                    // timer has not come round again after the last spot was used up.
+                    if (emptyScans >= 3) {
+                        failed = true;
+                        return true;
+                    }
+                    bot.setStatus("looking for " + name + " nearby");
+                    return false;
                 }
                 // Nothing in view: walk 96 blocks along a heading, turning when the path fails.
                 bot.setStatus("searching for " + name);
@@ -162,10 +193,20 @@ public final class FetchFluidTask extends Task {
                     }
                     explore = Goal.xz(feet.getX() + (int) (Math.cos(heading) * 96.0),
                             feet.getZ() + (int) (Math.sin(heading) * 96.0), 8.0);
+                    exploreTicks = 0;
                 }
                 Nav.Status status = bot.nav.goTo(explore);
                 if (status == Nav.Status.FAILED) {
                     heading += Math.PI / 2 + 0.4;
+                } else if (status == Nav.Status.DONE && ++legs % 5 == 0) {
+                    // Bend the route by ~60 degrees every 5th leg so the search does not follow a single
+                    // line for ever.
+                    heading += 1.05;
+                } else if (status == Nav.Status.RUNNING && ++exploreTicks > 3000) {
+                    // A leg that takes more than 2.5 minutes is not worth finishing: turn away.
+                    heading += Math.PI / 2 + 0.4;
+                    explore = null;
+                    bot.nav.reset();
                 }
                 if (status != Nav.Status.RUNNING) {
                     explore = null;

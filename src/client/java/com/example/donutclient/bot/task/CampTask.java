@@ -60,6 +60,10 @@ public final class CampTask extends Task {
     private int idleTicks;
     private int dropWait;
     private int buildFails;
+    /** Loot carried when the last COLLECT trip started, to tell whether the trip brought anything in. */
+    private int lootBefore;
+    /** While positive, drops are ignored (the last trip out of cover for them was fruitless). */
+    private int collectBackoff;
     /** Set when the task ended without {@code done} being satisfied. */
     public boolean exhausted;
 
@@ -179,13 +183,16 @@ public final class CampTask extends Task {
                     bot.input.sneak = true;
                     return false;
                 }
-                if (mode == Mode.ROOF) {
-                    // Clear the head block so there is room to stand under the roof.
+                if (mode == Mode.ROOF && stateTicks <= 400) {
+                    // Clear the head-level blocks under the roof (ours and the three open neighbours) so
+                    // there is room to stand and to hit. An extra "is the block directly above" condition
+                    // used to make this loop skip the neighbours. Bounded by the build timeout below so an
+                    // obstinate block cannot hold the build up for ever.
                     for (BlockPos pos : new BlockPos[] {spot.above(), spot.north().above(), spot.south().above(),
                             spot.west().above()}) {
                         BlockState blockState = bs(pos);
                         if (!blockState.isAir() && !blockState.canBeReplaced() && blockState.getFluidState().isEmpty()
-                                && blockState.getDestroySpeed(bot.level(), pos) >= 0.0f && pos.equals(spot.above())) {
+                                && blockState.getDestroySpeed(bot.level(), pos) >= 0.0f) {
                             bot.act.breakBlock(pos);
                             return false;
                         }
@@ -207,7 +214,9 @@ public final class CampTask extends Task {
                         return false;
                     }
                 }
-                idleTicks = 0;
+                // idleTicks is deliberately not reset here: it counts fighting time without a hit, and
+                // resetting it on every re-entry (after each trip for drops) meant a drop that can never
+                // be picked up kept the camp alive for ever.
                 go(S.FIGHT);
             }
             case FIGHT -> {
@@ -227,7 +236,19 @@ public final class CampTask extends Task {
                 double reachDist = 9.0;
                 double stareDist = 2304.0;
                 int preyNearby = 0;
+                boolean dropsNearby = false;
+                // Badly hurt: do not provoke anything new and do not leave cover until healed.
+                boolean hurt = player.getHealth() <= 10.0f;
+                if (collectBackoff > 0) {
+                    collectBackoff--;
+                }
                 for (Entity entity : bot.level().entitiesForRendering()) {
+                    if (entity instanceof ItemEntity item) {
+                        if (collectBackoff == 0 && loot.test(item.getItem()) && item.distanceToSqr(player) < 196.0) {
+                            dropsNearby = true;
+                        }
+                        continue;
+                    }
                     if (!(entity instanceof LivingEntity living) || !living.isAlive()) {
                         continue;
                     }
@@ -244,7 +265,7 @@ public final class CampTask extends Task {
                         inReach = living;
                     }
                     // Under a roof: provoke calm endermen by looking them in the eye so they come to us.
-                    if (isPrey && mode == Mode.ROOF && entity instanceof EnderMan enderman && !enderman.isCreepy()
+                    if (isPrey && !hurt && mode == Mode.ROOF && entity instanceof EnderMan enderman && !enderman.isCreepy()
                             && dist < stareDist && player.hasLineOfSight(entity)) {
                         stareDist = dist;
                         stareAt = living;
@@ -261,17 +282,13 @@ public final class CampTask extends Task {
                     bot.act.lookAt(stareAt.getEyePosition());
                 }
 
-                boolean dropsNearby = false;
-                for (Entity entity : bot.level().entitiesForRendering()) {
-                    if (entity instanceof ItemEntity item && loot.test(item.getItem()) && item.distanceToSqr(player) < 196.0) {
-                        dropsNearby = true;
-                    }
-                }
                 if (dropsNearby) {
                     dropWait++;
-                    // Leave cover for the loot once the coast is clear, or after 45 s regardless.
-                    if ((inReach == null && preyNearby == 0 && dropWait > 20) || dropWait > 900) {
+                    // Leave cover for the loot once the coast is clear, or after 45 s regardless - but
+                    // never while badly hurt.
+                    if (!hurt && ((inReach == null && preyNearby == 0 && dropWait > 20) || dropWait > 900)) {
                         dropWait = 0;
+                        lootBefore = bot.inv.count(loot);
                         go(S.COLLECT);
                     }
                 } else {
@@ -286,6 +303,11 @@ public final class CampTask extends Task {
             case COLLECT -> {
                 bot.setStatus("collecting " + what + " drops");
                 if (stateTicks > 400 || !drops.tick()) {
+                    if (bot.inv.count(loot) <= lootBefore) {
+                        // Nothing gained (the drop is out of reach): stay in cover for 30 s before
+                        // trying again instead of walking out every second.
+                        collectBackoff = 600;
+                    }
                     go(S.GOTO);
                 }
             }

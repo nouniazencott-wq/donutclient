@@ -1,8 +1,11 @@
 package com.example.donutclient.bot.task;
 
 import com.example.donutclient.bot.Bot;
+import com.example.donutclient.bot.Reflex;
 import com.example.donutclient.bot.path.Goal;
 import com.example.donutclient.bot.path.Nav;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.function.BooleanSupplier;
 import java.util.function.Predicate;
 import net.minecraft.core.BlockPos;
@@ -36,6 +39,12 @@ public final class HuntTask extends Task {
     /** Ticks spent retreating; 0 when not retreating. */
     private int retreat;
     private Goal retreatGoal;
+    /** While positive, low health does not start another retreat (the last one timed out without healing). */
+    private int retreatCooldown;
+    /** Entity ids of prey that could not be reached or caught; skipped by {@link #pick()} until cleared. */
+    private final Set<Integer> skipped = new HashSet<>();
+    /** Bot tick at which {@link #skipped} was last cleared. */
+    private long skippedSince;
 
     public HuntTask(Bot bot, String what, Predicate<Entity> prey, Predicate<ItemStack> loot, BooleanSupplier done) {
         super(bot);
@@ -62,8 +71,16 @@ public final class HuntTask extends Task {
             return true;
         }
 
-        // Low health: run 20 blocks directly away from the target until healed (or 45 s passed).
-        if (retreat > 0 || bot.player().getHealth() <= 7.0f) {
+        if (retreatCooldown > 0) {
+            retreatCooldown--;
+        }
+        // Low health: run 20 blocks directly away from the target until healed (or 45 s passed). Only when
+        // something can actually hurt us - the prey itself or a monster nearby. Harmless prey is hunted on:
+        // a starving bot cannot heal, and running from the animals that are its food would starve it.
+        boolean low = retreat == 0 && retreatCooldown == 0 && bot.player().getHealth() <= 7.0f;
+        boolean threatened = low
+                && ((target != null && Reflex.isHostile(target)) || bot.reflex.nearestHostile(16.0) != null);
+        if (retreat > 0 || threatened) {
             if (retreat == 0) {
                 retreat = 1;
                 BlockPos feet = bot.feet();
@@ -82,12 +99,20 @@ public final class HuntTask extends Task {
             bot.setStatus("retreating to recover");
             retreat++;
             if (bot.player().getHealth() >= 15.0f || retreat > 900) {
+                if (retreat > 900) {
+                    // Not healing (no food): do not start the next retreat right away, or the bot would
+                    // do nothing but retreat in 20-block hops for ever. Carry on for a minute first.
+                    retreatCooldown = 1200;
+                }
                 retreat = 0;
                 target = null;
                 goal = null;
                 return false;
             }
-            bot.nav.goTo(retreatGoal);
+            // Arrived (or no way there): stand still rather than re-planning every tick.
+            if (retreatGoal != null && bot.nav.goTo(retreatGoal) != Nav.Status.RUNNING) {
+                retreatGoal = null;
+            }
             return false;
         }
 
@@ -97,8 +122,17 @@ public final class HuntTask extends Task {
             return false;
         }
 
+        // Give skipped prey another chance every 2 minutes (it moves around).
+        if (bot.tick - skippedSince > 2400L) {
+            skippedSince = bot.tick;
+            skipped.clear();
+        }
         if (target == null || !target.isAlive() || target.isRemoved() || ++chaseTicks > 900
                 || target.distanceToSqr(bot.player()) > 4900.0) {
+            if (target != null && target.isAlive() && chaseTicks > 900) {
+                // 45 s of chasing without a kill: do not pick the very same animal again straight away
+                skipped.add(target.getId());
+            }
             target = pick();
             chaseTicks = 0;
             goal = null;
@@ -160,6 +194,10 @@ public final class HuntTask extends Task {
         }
         Nav.Status status = bot.nav.goTo(goal);
         if (status == Nav.Status.FAILED) {
+            // unreachable: remember it, otherwise pick() hands the same nearest animal back every time
+            if (target != null) {
+                skipped.add(target.getId());
+            }
             target = null;
             goal = null;
         }
@@ -171,6 +209,9 @@ public final class HuntTask extends Task {
         double bestDist = 4096.0;
         for (Entity entity : bot.level().entitiesForRendering()) {
             if (!(entity instanceof LivingEntity living) || !living.isAlive() || living.isBaby() || !prey.test(entity)) {
+                continue;
+            }
+            if (skipped.contains(entity.getId())) {
                 continue;
             }
             if (bot.memory.dangerous(entity.blockPosition())) {

@@ -3,6 +3,7 @@ package com.example.donutclient.bot.task;
 import com.example.donutclient.bot.Bot;
 import com.example.donutclient.bot.path.Goal;
 import com.example.donutclient.bot.path.Nav;
+import java.util.ArrayList;
 import java.util.List;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -24,6 +25,20 @@ public final class NetherReturnTask extends Task {
     /** Long-range leg towards the remembered portal. */
     private DeepTravelTask travel;
     private boolean travelled;
+    /** Ticks spent at the remembered position without a portal block in sight. */
+    private int atFrameTicks;
+    /** Whether a portal frame (obsidian) was seen at the remembered position. */
+    private boolean frameSeen;
+    /** Set once the remembered position turned out to have no portal at all: walk rings around it and look. */
+    private boolean searching;
+    private int searchIdx;
+    private Goal searchGoal;
+    /** Ticks spent pushing into the portal without being taken through. */
+    private int pushTicks;
+    /** While non-null the bot first walks to this block on an open side of the portal. */
+    private Goal approach;
+    private int approachTicks;
+    private int approachSide;
 
     public NetherReturnTask(Bot bot) {
         super(bot);
@@ -47,6 +62,8 @@ public final class NetherReturnTask extends Task {
                         portal = portal.below();
                     }
                     goal = null;
+                    approach = null;
+                    pushTicks = 0;
                 }
             }
         }
@@ -54,22 +71,54 @@ public final class NetherReturnTask extends Task {
         if (portal == null) {
             BlockPos known = bot.memory.netherPortal;
             if (known == null) {
-                bot.setStatus("lost: no portal known in the nether");
+                // No position remembered (used to stand here "lost" for ever): search around where we are.
+                known = bot.feet();
+                bot.memory.netherPortal = known;
+            }
+            if (searching) {
+                // The remembered spot has neither a portal nor a frame, so it was wrong. Visit points on
+                // growing rings around it (8 per ring, 48 blocks apart); the scan above keeps looking for
+                // portal blocks and takes over as soon as one is in view.
+                bot.setStatus("searching for a nether portal");
+                if (searchGoal == null) {
+                    int ring = 1 + searchIdx / 8;
+                    double angle = (searchIdx % 8) * Math.PI / 4.0;
+                    searchGoal = Goal.xz(known.getX() + (int) (Math.cos(angle) * 48.0 * ring),
+                            known.getZ() + (int) (Math.sin(angle) * 48.0 * ring), 8.0);
+                    searchIdx++;
+                }
+                if (bot.nav.goTo(searchGoal) != Nav.Status.RUNNING) {
+                    searchGoal = null;
+                }
                 return false;
             }
             bot.setStatus("returning to the nether portal (" + (int) Math.sqrt(bot.feet().distSqr(known)) + " blocks)");
             if (bot.feet().distSqr(known) < 36.0) {
                 // We are at the frame but there is no portal block: it went out, so re-light it.
-                if (bot.inv.hold(Items.FLINT_AND_STEEL)) {
+                // Scan and click once every 12 ticks only.
+                if (atFrameTicks++ % 12 == 0) {
                     List<BlockPos> obsidian = bot.scan.find(state -> state.is(Blocks.OBSIDIAN), 1, 40);
-                    for (BlockPos pos : obsidian) {
-                        if (bot.level().getBlockState(pos.above()).isAir() && bot.act.eyeDist(pos) < 4.2) {
-                            if (lightTries++ % 12 == 0) {
-                                bot.act.useOn(pos, Direction.UP);
+                    if (!obsidian.isEmpty()) {
+                        frameSeen = true;
+                    }
+                    if (bot.inv.count(Items.FLINT_AND_STEEL) > 0 && bot.inv.hold(Items.FLINT_AND_STEEL)) {
+                        // Only fire on top of the bottom row lights the portal, and the nearest block with air
+                        // above it may just as well be the top of the frame: try every candidate in turn.
+                        List<BlockPos> candidates = new ArrayList<>();
+                        for (BlockPos pos : obsidian) {
+                            if (bot.level().getBlockState(pos.above()).isAir() && bot.act.eyeDist(pos) < 4.2) {
+                                candidates.add(pos);
                             }
-                            break;
+                        }
+                        if (!candidates.isEmpty()) {
+                            bot.act.useOn(candidates.get(lightTries++ % candidates.size()), Direction.UP);
                         }
                     }
+                }
+                // 10 s here and not a single obsidian block around: there never was a portal at this spot.
+                if (atFrameTicks > 200 && !frameSeen) {
+                    searching = true;
+                    bot.nav.reset();
                 }
                 return false;
             }
@@ -94,6 +143,15 @@ public final class NetherReturnTask extends Task {
         }
 
         bot.setStatus("going home through the portal");
+        if (approach != null) {
+            Nav.Status status = bot.nav.goTo(approach);
+            if (status == Nav.Status.RUNNING && ++approachTicks < 200) {
+                return false;
+            }
+            approach = null;
+            pushTicks = 0;
+            return false;
+        }
         Vec3 centre = Vec3.atBottomCenterOf(portal);
         double dist = bot.player().position().distanceTo(centre);
         if (dist > 2.5) {
@@ -116,6 +174,13 @@ public final class NetherReturnTask extends Task {
             if (bot.player().horizontalCollision && bot.player().onGround()) {
                 bot.input.jump = true;
             }
+        }
+        // 8 s of pushing and still in the Nether (the trip takes 4 s): we are wedged against the frame, or the
+        // portal is on cooldown. Walk to the block in front of an open face and come in again from there.
+        if (++pushTicks > 160) {
+            approach = PortalTask.sideGoal(bot, portal, approachSide++);
+            approachTicks = 0;
+            pushTicks = 0;
         }
         return false;
     }
