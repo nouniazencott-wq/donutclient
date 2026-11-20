@@ -14,7 +14,7 @@ import net.minecraft.client.Minecraft;
  *
  * Keep modules small and single-purpose. If a module needs to change vanilla
  * behaviour that has no event, add a Mixin in the mixin package and have the
- * mixin consult the module's state (see GameRendererMixin + ZoomModule).
+ * mixin consult the module's state (see CameraMixin + ZoomModule).
  */
 public abstract class Module {
     protected final Minecraft mc = Minecraft.getInstance();

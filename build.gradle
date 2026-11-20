@@ -21,6 +21,17 @@ loom {
     }
 }
 
+fabricApi {
+    // Headless end-to-end tests that launch a real client (./gradlew runClientGameTest).
+    configureTests {
+        createSourceSet = true
+        modId = "donutclient-test"
+        enableGameTests = false
+        enableClientGameTests = true
+        eula = true
+    }
+}
+
 dependencies {
     // Versions live in gradle.properties
     minecraft "com.mojang:minecraft:${project.minecraft_version}"

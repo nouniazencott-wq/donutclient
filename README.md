@@ -37,7 +37,7 @@ src/client/    everything else
   module/ModuleManager.java  registry + event dispatch + keybinds
   modules/*.java             the features (FPS, Coordinates, Keystrokes, Zoom)
   hud/HudContext.java        thin facade over Minecraft's HUD drawing API
-  mixin/GameRendererMixin    FOV hook for Zoom (the only vanilla patch)
+  mixin/CameraMixin    FOV hook for Zoom (the only vanilla patch)
   config/ClientConfig.java   saves enabled state to config/donutclient.json
 ```
 

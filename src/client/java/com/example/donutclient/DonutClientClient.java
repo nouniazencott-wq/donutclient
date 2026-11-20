@@ -36,7 +36,7 @@ public class DonutClientClient implements ClientModInitializer {
                 DonutClient.id("modules"),
                 (graphics, delta) -> {
                     var mc = net.minecraft.client.Minecraft.getInstance();
-                    if (mc.level == null || mc.options.hideGui) return;
+                    if (mc.level == null) return;
                     if (mc.getDebugOverlay().showDebugScreen()) return; // F3 open: get out of the way
                     manager.onRenderHud(new HudContext(graphics, delta));
                 }
