@@ -67,7 +67,9 @@ public final class FetchFluidTask extends Task {
                         BlockPos bank = src.offset(dx, dy, dz);
                         double ex = dx, ey = dy + 1 + 1.62 - 0.5, ez = dz;
                         double d = Math.sqrt(ex * ex + ey * ey + ez * ez);
-                        if (d > 3.9 || d >= bestD) continue;
+                        // A bank right beside the source always has a clear view of it; farther ones may not.
+                        if (Math.abs(dx) + Math.abs(dz) > 1) d += 3;
+                        if (d > 6.9 || d >= bestD) continue;
                         BlockState bks = level.getBlockState(bank);
                         if ((Blocks2.flags(level, bank, bks) & Blocks2.STAND) == 0) continue;
                         if (!level.getBlockState(bank.above()).isAir() || !level.getBlockState(bank.above(2)).isAir()) continue;

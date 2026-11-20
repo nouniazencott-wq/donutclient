@@ -26,6 +26,8 @@ public final class Nav {
     /** While set, paths near this point prefer digging through solid over walking in the open. */
     public BlockPos coverCenter;
     public int coverRadius = 14;
+    /** Open-air penalty in the End (the dragon only bothers what it can see). */
+    public double endOpenCost = 22;
     public String info = "";
 
     public Nav(Bot bot) { this.bot = bot; }
@@ -84,7 +86,9 @@ public final class Nav {
             search.coverCenter = coverCenter;
             search.coverRadius = coverRadius;
             // The Nether's open spaces are full of lava and things that shoot; solid netherrack is safe.
-            search.openCost = bot.level().dimension() == net.minecraft.world.level.Level.NETHER ? 16 : 0;
+            var dim = bot.level().dimension();
+            search.openCost = dim == net.minecraft.world.level.Level.NETHER ? 16
+                    : dim == net.minecraft.world.level.Level.END ? endOpenCost : 0;
         }
         if (bot.player().isInWater()) bot.input.jump = true; // tread water while thinking
         if (!search.step(12_000_000L)) return Status.RUNNING;

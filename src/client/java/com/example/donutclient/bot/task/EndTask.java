@@ -38,11 +38,14 @@ public final class EndTask extends Task {
     private BlockPos stand, wall0;
     private Goal goal;
     private int ticks, stateTicks;
-    private final Map<Integer, Integer> crystalFails = new HashMap<>();
     private Goal fleeGoal;
     private int fleeTicks;
     private Goal waitGoal;
+    private Goal approach;
     private Goal inlandGoal;
+    private boolean inland;
+    private boolean wentDeep;
+    private Goal deepGoal;
     private MineTask restock;
     private BlockPos exitBlock;
     private int noDragonTicks;
@@ -53,6 +56,7 @@ public final class EndTask extends Task {
     public void onInterrupted() {
         super.onInterrupted();
         crystal = null;
+        tower = null;
         goal = null;
         restock = null;
     }
@@ -73,7 +77,7 @@ public final class EndTask extends Task {
         stateTicks++;
         checkDragonDead();
 
-        // Stay out of dragon breath.
+        // Stay out of dragon breath. The cloud hugs the ground, so two blocks up is out of it.
         LocalPlayer p = bot.player();
         if (fleeTicks > 0) {
             fleeTicks--;
@@ -82,26 +86,51 @@ public final class EndTask extends Task {
             return false;
         }
         for (Entity e : bot.level().entitiesForRendering()) {
-            if (e instanceof AreaEffectCloud cloud) {
-                double r = cloud.getRadius() + 2.0;
-                double dx = p.getX() - cloud.getX(), dz = p.getZ() - cloud.getZ();
-                if (dx * dx + dz * dz < r * r && Math.abs(p.getY() - cloud.getY()) < 4) {
-                    double len = Math.sqrt(dx * dx + dz * dz);
-                    if (len < 0.2) { dx = -p.getX(); dz = -p.getZ(); len = Math.max(1, Math.sqrt(dx * dx + dz * dz)); }
-                    // Away from the cloud, leaning toward the middle of the island rather than its rim.
-                    double ax = dx / len * 9 - Math.signum(p.getX()) * 3, az = dz / len * 9 - Math.signum(p.getZ()) * 3;
-                    fleeGoal = Goal.xz((int) Math.floor(p.getX() + ax), (int) Math.floor(p.getZ() + az), 2);
-                    fleeTicks = 60;
-                    bot.nav.reset();
-                    return false;
+            if (!(e instanceof AreaEffectCloud cloud)) continue;
+            double r = cloud.getRadius() + 2.0;
+            double dx = p.getX() - cloud.getX(), dz = p.getZ() - cloud.getZ();
+            if (dx * dx + dz * dz >= r * r) continue;
+            double dy = p.getY() - cloud.getY();
+            if (dy < -1.5 || dy > 4) continue; // it is above a tunnel we are in, or far below
+            if (underCover()) continue;
+            if (!p.onGround()) continue; // climbing or falling: keep moving, it will be left behind
+            bot.setStatus("dodging dragon breath");
+            bot.nav.reset();
+            // Run straight out of it; if the way out is a drop, hop up onto a quick pillar instead.
+            double len = Math.sqrt(dx * dx + dz * dz);
+            if (len < 0.3) { dx = -p.getX(); dz = -p.getZ(); len = Math.max(1, Math.sqrt(dx * dx + dz * dz)); }
+            boolean ran = false;
+            for (double turn : new double[]{0, 0.8, -0.8, 1.6, -1.6}) {
+                double ax = (dx * Math.cos(turn) - dz * Math.sin(turn)) / len, az = (dx * Math.sin(turn) + dz * Math.cos(turn)) / len;
+                if (safeRun(p.getX() + ax * 1.2, p.getZ() + az * 1.2) && safeRun(p.getX() + ax * 2.4, p.getZ() + az * 2.4)) {
+                    bot.act.faceXZ(p.getX() + ax * 5, p.getZ() + az * 5);
+                    bot.input.forward = true;
+                    bot.input.sprint = true;
+                    if (p.horizontalCollision) bot.input.jump = true;
+                    ran = true;
+                    break;
                 }
             }
+            if (!ran) {
+                bot.input.jump = true;
+                if (p.getY() - Math.floor(p.getY()) > 0.9 || !p.onGround()) bot.act.placeBlock(bot.feet());
+            }
+            return false;
         }
 
         // First get off the arrival platform and well onto the island: near the rim a shove means the void.
         double r2 = p.getX() * p.getX() + p.getZ() * p.getZ();
-        if (r2 > 62 * 62 && state == S.CRYSTALS && crystal == null) {
+        if (r2 < 52 * 52) inland = true;
+        if (!inland && state == S.CRYSTALS && tower == null) {
             bot.setStatus("moving onto the main island");
+            // Dragon fireballs put their cloud on anyone within a few blocks of the impact, even through
+            // rock, so the tunnel has to run well below the surface.
+            if (!wentDeep) {
+                if (deepGoal == null) deepGoal = Goal.y(Math.max(36, bot.feet().getY() - 9));
+                Nav.Status st = bot.nav.goTo(deepGoal);
+                if (st != Nav.Status.RUNNING) wentDeep = true;
+                return false;
+            }
             if (inlandGoal == null) inlandGoal = Goal.xz(0, 0, 48);
             if (bot.nav.goTo(inlandGoal) == Nav.Status.FAILED) inlandGoal = null;
             restock = null;
@@ -115,7 +144,7 @@ public final class EndTask extends Task {
         }
         // End stone is the only handy block the dragon cannot smash, so the towers are climbed with it.
         bot.inv.preferBlock = Items.END_STONE;
-        if (state == S.CRYSTALS && crystal == null && bot.inv.count(Items.END_STONE) < 80) {
+        if (state == S.CRYSTALS && tower == null && bot.inv.count(Items.END_STONE) < 80) {
             int target = 200;
             restock = new MineTask(bot, "end stone", s -> s.is(Blocks.END_STONE), s -> s.is(Items.END_STONE),
                     () -> bot.inv.count(Items.END_STONE) >= target, true);
@@ -147,41 +176,86 @@ public final class EndTask extends Task {
 
     private static final Direction[] DIRS = {Direction.EAST, Direction.SOUTH, Direction.WEST, Direction.NORTH};
 
+    /** One of the ten obsidian towers. */
+    private static final class Tower {
+        final BlockPos crystalPos;
+        int fails;
+
+        Tower(BlockPos p) { crystalPos = p; }
+    }
+
+    private java.util.List<Tower> towers;
+    private Tower tower;
+
+    private EndCrystal crystalAt(BlockPos pos) {
+        for (Entity e : bot.level().entitiesForRendering()) {
+            if (e instanceof EndCrystal ec && ec.isAlive() && ec.blockPosition().distSqr(pos) < 9) return ec;
+        }
+        return null;
+    }
+
     private void crystals() {
-        if (crystal != null && (!crystal.isAlive() || crystal.isRemoved())) { crystal = null; goal = null; }
-        if (crystal == null) {
-            double best = Double.MAX_VALUE;
-            int count = 0;
-            for (Entity e : bot.level().entitiesForRendering()) {
-                if (!(e instanceof EndCrystal ec) || !ec.isAlive()) continue;
-                if (ec.getY() < 70) continue; // not a tower crystal
-                if (crystalFails.getOrDefault(ec.getId(), 0) >= 4) continue;
-                count++;
-                double d = ec.distanceToSqr(bot.player());
-                if (d < best) { best = d; crystal = ec; }
+        if (towers == null) {
+            // The integrated server knows where the towers are.
+            towers = new java.util.ArrayList<>();
+            var server = bot.serverLevel();
+            if (server != null) {
+                for (var spike : net.minecraft.world.level.levelgen.feature.EndSpikeFeature.getSpikesForLevel(server)) {
+                    towers.add(new Tower(new BlockPos(spike.getCenterX(), spike.getHeight() + 1, spike.getCenterZ())));
+                }
             }
-            if (crystal == null) {
+        }
+        if (tower != null) {
+            crystal = crystalAt(tower.crystalPos);
+            double dx = bot.player().getX() - tower.crystalPos.getX(), dz = bot.player().getZ() - tower.crystalPos.getZ();
+            if (crystal == null && dx * dx + dz * dz < 24 * 24) {
+                // Close enough to see it, and it is not there: destroyed.
+                bot.say("Crystal at " + tower.crystalPos.getX() + ", " + tower.crystalPos.getZ() + " is gone ("
+                        + (towers.size() - 1) + " towers left).");
+                towers.remove(tower);
+                tower = null;
+                goal = null;
+            }
+        }
+        if (tower == null) {
+            double best = Double.MAX_VALUE;
+            for (Tower t : towers) {
+                if (t.fails >= 4) continue;
+                double d = t.crystalPos.distSqr(bot.feet());
+                if (d < best) { best = d; tower = t; }
+            }
+            if (tower == null) {
                 bot.say("All reachable crystals are gone. Time for the dragon.");
                 state = S.DRAGON;
                 stateTicks = 0;
                 return;
             }
-            bot.say("Going after an end crystal at " + crystal.blockPosition().toShortString() + " (" + count + " left)");
+            bot.say("Going after the end crystal at " + tower.crystalPos.toShortString());
             dirIdx = pickDir();
             setupStand();
+            return;
         }
-        BlockPos cp = crystal.blockPosition();
+        BlockPos cp = tower.crystalPos;
         bot.setStatus("destroying the crystal at " + cp.getX() + ", " + cp.getZ());
-        if (stateTicks > 20 * 60 * 6) { failCrystal(); return; }
+        if (stateTicks > 20 * 60 * 8) { failCrystal(); return; }
         switch (cstate) {
             case GOTO -> {
+                // Come in underground and surface right at the foot of the tower.
+                BlockPos f = bot.feet();
+                double hd = Math.sqrt((double) (f.getX() - stand.getX()) * (f.getX() - stand.getX())
+                        + (double) (f.getZ() - stand.getZ()) * (f.getZ() - stand.getZ()));
+                if (hd > 6 && f.getY() < stand.getY() - 6) {
+                    if (approach == null) approach = Goal.xz(stand.getX(), stand.getZ(), 3);
+                    if (bot.nav.goTo(approach) == Nav.Status.FAILED) approach = null;
+                    return;
+                }
+                approach = null;
                 if (goal == null) goal = Goal.block(stand);
                 Nav.Status st = bot.nav.goTo(goal);
                 if (st == Nav.Status.DONE) { cstate = C.WALL; bot.nav.reset(); }
                 else if (st == Nav.Status.FAILED) {
                     dirIdx = (dirIdx + 1) % 4;
-                    crystalFails.merge(crystal.getId(), 1, Integer::sum);
-                    if (crystalFails.get(crystal.getId()) >= 4) { crystal = null; return; }
+                    if (++tower.fails >= 4) { tower = null; return; }
                     setupStand();
                 }
             }
@@ -190,8 +264,10 @@ public final class EndTask extends Task {
                 for (BlockPos w : new BlockPos[]{wall0, wall0.above()}) {
                     BlockState s = bs(w);
                     if (s.isCollisionShapeFullBlock(bot.level(), w)) continue;
+                    bot.act.fastPlace = true;
                     if (!s.isAir() && !s.canBeReplaced()) bot.act.breakBlock(w);
                     else bot.act.placeBlock(w);
+                    bot.act.fastPlace = false;
                     return;
                 }
                 cstate = C.HIT;
@@ -203,6 +279,7 @@ public final class EndTask extends Task {
                     cstate = C.WALL;
                     return;
                 }
+                if (crystal == null) return;
                 bot.act.lookAt(crystal.getBoundingBox().getCenter());
                 if (bot.act.attackReady()) bot.act.attack(crystal);
             }
@@ -210,14 +287,15 @@ public final class EndTask extends Task {
     }
 
     private void failCrystal() {
-        crystalFails.merge(crystal.getId(), 4, Integer::sum);
+        if (tower != null) tower.fails = 4;
+        tower = null;
         crystal = null;
         goal = null;
         stateTicks = 0;
     }
 
     private int pickDir() {
-        BlockPos cp = crystal.blockPosition();
+        BlockPos cp = tower.crystalPos;
         double dx = bot.player().getX() - cp.getX(), dz = bot.player().getZ() - cp.getZ();
         if (Math.abs(dx) > Math.abs(dz)) return dx > 0 ? 0 : 2;
         return dz > 0 ? 1 : 3;
@@ -225,12 +303,13 @@ public final class EndTask extends Task {
 
     /** Works out where to stand and where the blast wall goes for the current side of the tower. */
     private void setupStand() {
-        BlockPos cp = crystal.blockPosition();
+        BlockPos cp = tower.crystalPos;
         int h = cp.getY() - 1; // the bedrock block under the crystal; also the level the bot stands at
         Direction d = DIRS[dirIdx];
         BlockPos base = new BlockPos(cp.getX(), h, cp.getZ());
-        boolean caged = bs(base.relative(d, 2)).is(Blocks.IRON_BARS) || bs(base.relative(d, 2).above()).is(Blocks.IRON_BARS);
-        int dist = caged ? 3 : 2;
+        // The crystal's own hitbox reaches one block out, so the wall goes two out and the bot three.
+        // (On caged towers the wall replaces two of the iron bars.)
+        int dist = 3;
         stand = base.relative(d, dist);
         wall0 = base.relative(d, dist - 1);
         cstate = C.GOTO;
@@ -256,7 +335,7 @@ public final class EndTask extends Task {
                 // Maybe a crystal respawned or was missed; otherwise the fight is over.
                 noDragonTicks = 0;
                 state = S.CRYSTALS;
-                crystalFails.clear();
+                if (towers != null) for (Tower t : towers) t.fails = 0;
             }
             waitNearFountain(null);
             return;
@@ -289,8 +368,51 @@ public final class EndTask extends Task {
         bot.nav.goTo(goal);
     }
 
+    /** Ground to run on at this spot: something to stand on within two blocks down and room for the body. */
+    private boolean safeRun(double x, double z) {
+        BlockPos f = BlockPos.containing(x, bot.player().getY() + 0.2, z);
+        if (!bs(f).getCollisionShape(bot.level(), f).isEmpty() && !bs(f.above()).getCollisionShape(bot.level(), f.above()).isEmpty()) return false;
+        for (int d = 1; d <= 3; d++) {
+            BlockPos b = f.below(d);
+            if (!bs(b).getCollisionShape(bot.level(), b).isEmpty()) return true;
+        }
+        return false;
+    }
+
+    /** Any nearby spot with a solid block overhead that is not inside a breath cloud. */
+    private Goal coverGoal() {
+        java.util.List<AreaEffectCloud> clouds = new java.util.ArrayList<>();
+        for (Entity e : bot.level().entitiesForRendering()) if (e instanceof AreaEffectCloud c) clouds.add(c);
+        return new Goal() {
+            public boolean at(int x, int y, int z) {
+                BlockState up = bs(new BlockPos(x, y + 2, z));
+                if (up.isAir() || !up.getFluidState().isEmpty()) return false;
+                for (AreaEffectCloud c : clouds) {
+                    double dx = x + 0.5 - c.getX(), dz = z + 0.5 - c.getZ(), r = c.getRadius() + 2.5;
+                    if (dx * dx + dz * dz < r * r && y - c.getY() > -1.5 && y - c.getY() < 1.5) return false;
+                }
+                return true;
+            }
+
+            public double h(int x, int y, int z) { return 0; }
+
+            public String toString() { return "cover"; }
+        };
+    }
+
+    private boolean underCover() {
+        BlockPos up = bot.feet().above(2);
+        return !bs(up).isAir() && bs(up).getFluidState().isEmpty();
+    }
+
     private void waitNearFountain(EnderDragon dragon) {
-        if (waitGoal == null) waitGoal = Goal.xz(5, 0, 1.5);
+        if (waitGoal == null) {
+            // A burrow a few blocks from the fountain, just under the surface.
+            int y = 90;
+            BlockPos.MutableBlockPos m = new BlockPos.MutableBlockPos(8, y, 0);
+            while (y > 30 && bs(m.set(8, y, 0)).isAir()) y--;
+            waitGoal = Goal.block(new BlockPos(8, y - 3, 0));
+        }
         Nav.Status st = bot.nav.goTo(waitGoal);
         if (st == Nav.Status.DONE && dragon != null) {
             bot.inv.holdWeapon();
