@@ -21,6 +21,8 @@ public final class Act {
     public boolean breaking;
     /** True if breakBlock was called during the current tick. */
     public boolean breakingRequested;
+    /** Emergency building: place blocks as fast as the game allows. */
+    public boolean fastPlace;
 
     Act(Bot bot) { this.bot = bot; }
 
@@ -83,7 +85,7 @@ public final class Act {
     public boolean placeHeld(BlockPos target, boolean throwaway) {
         BlockState cur = mc.level.getBlockState(target);
         if (!cur.canBeReplaced()) return true;
-        if (bot.tick - lastPlaceTick < 4) return false;
+        if (bot.tick - lastPlaceTick < (fastPlace ? 2 : 4)) return false;
         if (throwaway && !bot.inv.holdThrowaway()) return false;
         Direction[] order = {Direction.DOWN, Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST, Direction.UP};
         for (int pass = 0; pass < 2; pass++) {

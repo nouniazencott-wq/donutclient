@@ -148,6 +148,7 @@ public final class SmeltTask extends Task {
                 go(S.WAIT);
             }
             case WAIT -> {
+                bot.heartbeat = bot.tick;
                 bot.setStatus("smelting " + what + " (" + Math.max(0, (waitTicks - stateTicks) / 20) + "s left)");
                 if (stateTicks >= waitTicks) go(S.OPEN_TAKE);
             }

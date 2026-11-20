@@ -46,6 +46,11 @@ public final class Pathfinder {
     private final boolean canPlace;
     private final boolean allowBreak;
     private final int maxNodes;
+    /** Optional: within coverRadius of coverCenter, moving through open air costs extra (prefer tunnelling). */
+    public BlockPos coverCenter;
+    public int coverRadius;
+    /** Extra cost for every step through open air (makes the bot tunnel instead; used in the Nether). */
+    public double openCost;
 
     private final Long2ObjectOpenHashMap<Node> nodes = new Long2ObjectOpenHashMap<>();
     private final PriorityQueue<Node> open = new PriorityQueue<>();
@@ -207,12 +212,42 @@ public final class Pathfinder {
         return (fl(x, y + 2, z) & LAVA) != 0 || (fl(x, y - 1, z) & LAVA) != 0;
     }
 
+    /** Extra cost for standing where one wrong step (or a shove) ends in lava. */
+    private double lavaPenalty(int x, int y, int z) {
+        double pen = 0;
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                if (dx == 0 && dz == 0) continue;
+                int f1 = fl(x + dx, y - 1, z + dz);
+                if ((f1 & LAVA) != 0) { pen += 10; continue; }
+                if ((f1 & PASS) != 0) {
+                    // Open drop next to us: look a few blocks down for lava.
+                    for (int d = 2; d <= 5; d++) {
+                        int f = fl(x + dx, y - d, z + dz);
+                        if ((f & LAVA) != 0) { pen += 6; break; }
+                        if ((f & PASS) == 0) break;
+                    }
+                }
+            }
+        }
+        return pen;
+    }
+
     // ---- expansion --------------------------------------------------------------
 
     private void relax(Node from, int x, int y, int z, double cost) {
         if (cost >= INF) return;
         if (y < minY + 1 || y > maxY - 2) return;
         if (lavaNear(x, y, z)) return;
+        cost += lavaPenalty(x, y, z);
+        if (openCost > 0 && (fl(x, y, z) & PASS) != 0 && (fl(x, y + 1, z) & PASS) != 0) cost += openCost;
+        if (coverCenter != null) {
+            int dx = x - coverCenter.getX(), dy = y - coverCenter.getY(), dz = z - coverCenter.getZ();
+            if (dx * dx + dy * dy + dz * dz <= coverRadius * coverRadius
+                    && (fl(x, y, z) & PASS) != 0 && (fl(x, y + 1, z) & PASS) != 0) {
+                cost += 30;
+            }
+        }
         Node n = node(x, y, z);
         if (n.closed) return;
         double g = from.g + cost;

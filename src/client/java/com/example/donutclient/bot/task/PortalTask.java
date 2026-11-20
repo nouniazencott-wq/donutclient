@@ -50,6 +50,7 @@ public final class PortalTask extends Task {
     private double heading = -1;
     private long lastScan = -1000;
     private FetchFluidTask lavaFetch;
+    private int knownTries;
 
     public PortalTask(Bot bot) { super(bot); }
 
@@ -102,7 +103,18 @@ public final class PortalTask extends Task {
         if (!portals.isEmpty()) {
             portalBlock = lowest(portals.get(0));
             go(S.ENTER);
-        } else go(S.FIND_LAVA);
+            return;
+        }
+        // A portal the bot used before, but out of sight: walk back to it.
+        BlockPos known = bot.memory.overworldPortal;
+        if (known != null && bot.feet().distSqr(known) > 48 * 48 && knownTries < 3) {
+            bot.setStatus("returning to my nether portal");
+            if (goal == null) goal = Goal.near(known, 6);
+            Nav.Status st = bot.nav.goTo(goal);
+            if (st == Nav.Status.FAILED) { knownTries++; goal = null; }
+            return;
+        }
+        go(S.FIND_LAVA);
     }
 
     private BlockPos lowest(BlockPos p) {

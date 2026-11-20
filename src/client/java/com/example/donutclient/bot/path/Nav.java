@@ -21,7 +21,11 @@ public final class Nav {
     private double bestH = Double.MAX_VALUE;
     private int noProgress;
     private int loadWait;
+    private int noPillarPlans;
     public boolean allowBreak = true;
+    /** While set, paths near this point prefer digging through solid over walking in the open. */
+    public BlockPos coverCenter;
+    public int coverRadius = 14;
     public String info = "";
 
     public Nav(Bot bot) { this.bot = bot; }
@@ -52,6 +56,7 @@ public final class Nav {
             if (r == PathExecutor.Result.RUNNING) return Status.RUNNING;
             if (r == PathExecutor.Result.FAILED) {
                 info = "replan: " + exec.failReason;
+                if (exec.failReason.startsWith("pillar")) noPillarPlans = 2;
                 failures++;
             } else {
                 failures = 0;
@@ -75,7 +80,11 @@ public final class Nav {
                 return Status.FAILED;
             }
             search = new Pathfinder(bot.level(), feet, goal, bot.inv.tools(),
-                    bot.inv.countThrowaway() > 2, allowBreak, 40000);
+                    bot.inv.countThrowaway() > 2 && noPillarPlans-- <= 0, allowBreak, 40000);
+            search.coverCenter = coverCenter;
+            search.coverRadius = coverRadius;
+            // The Nether's open spaces are full of lava and things that shoot; solid netherrack is safe.
+            search.openCost = bot.level().dimension() == net.minecraft.world.level.Level.NETHER ? 16 : 0;
         }
         if (bot.player().isInWater()) bot.input.jump = true; // tread water while thinking
         if (!search.step(12_000_000L)) return Status.RUNNING;

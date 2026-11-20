@@ -4,6 +4,8 @@ import com.example.donutclient.bot.Bot;
 import com.example.donutclient.bot.Ing;
 import com.example.donutclient.bot.Locate;
 import com.example.donutclient.bot.Reflex;
+import com.example.donutclient.bot.path.Goal;
+import com.example.donutclient.bot.path.Nav;
 import net.minecraft.core.BlockPos;
 import net.minecraft.tags.BiomeTags;
 import net.minecraft.tags.BlockTags;
@@ -43,46 +45,64 @@ public final class BeatGameTask extends Task {
         var gear = bot.gear;
 
         stage("recover items", () -> !RecoverItemsTask.pending(bot), () -> new RecoverItemsTask(bot));
-        stage("gather wood", () -> woodUnits() >= 40 || gear.pickTier() >= 1, () -> wood(12));
-        stage("wooden pickaxe", () -> gear.pickTier() >= 1, () -> new CraftTask(bot).want(Ing.WOOD_PICK, 1));
-        stage("mine stone", () -> inv.count(Ing.COBBLE.pred) >= 20 || (gear.pickTier() >= 2 && hasWeapon()),
+        stage("gather wood", () -> !inOverworld() || woodUnits() >= 40 || gear.pickTier() >= 1, () -> wood(12));
+        stage("wooden pickaxe", () -> !inOverworld() || gear.pickTier() >= 1, () -> new CraftTask(bot).want(Ing.WOOD_PICK, 1));
+        stage("wood reserve", () -> !inOverworld() || woodUnits() >= 6 || (gear.pickTier() >= 3 && nextGear() == null && gear.ironNeeded() == 0),
+                () -> wood(5));
+        stage("mine stone", () -> !inOverworld() || inv.count(Ing.COBBLE.pred) >= 12 || (gear.pickTier() >= 2 && hasWeapon()),
                 () -> stone(24));
-        stage("stone tools", () -> gear.pickTier() >= 2 && hasWeapon(),
+        stage("stone tools", () -> !inOverworld() || (gear.pickTier() >= 2 && hasWeapon()),
                 () -> new CraftTask(bot).want(Ing.STONE_PICK, 1).want(Ing.STONE_SWORD, 1).want(Ing.STONE_AXE, 1));
         stage("spare pickaxe", () -> inv.count(ItemTags.PICKAXES) >= 2
                         || !new CraftTask(bot).want(Ing.STONE_PICK, inv.count(Items.STONE_PICKAXE) + 1).feasible(),
                 () -> new CraftTask(bot).want(Ing.STONE_PICK, inv.count(Items.STONE_PICKAXE) + 1));
-        stage("food", () -> foodCount() >= 6,
+        stage("food", () -> !inOverworld() || foodCount() >= 6,
                 () -> new HuntTask(bot, "animals", BeatGameTask::isLivestock, BeatGameTask::isMeat, () -> foodCount() >= 20));
-        stage("iron ore", () -> gear.ironOwned() >= gear.ironNeeded(),
+        stage("iron ore", () -> !inOverworld() || gear.ironOwned() >= gear.ironNeeded(),
                 () -> ore("iron ore", s -> s.is(Blocks.IRON_ORE) || s.is(Blocks.DEEPSLATE_IRON_ORE),
                         s -> s.is(Items.RAW_IRON), () -> gear.ironOwned() >= gear.ironNeeded()));
-        stage("fuel", () -> fuelUnits() >= smeltables(),
+        stage("fuel", () -> !inOverworld() || fuelUnits() >= smeltables(),
                 () -> ore("coal", s -> s.is(Blocks.COAL_ORE) || s.is(Blocks.DEEPSLATE_COAL_ORE),
                         s -> s.is(Items.COAL), () -> fuelUnits() >= smeltables() + 8));
-        stage("smelt iron", () -> inv.count(Items.RAW_IRON) == 0,
+        stage("smelt iron", () -> !inOverworld() || inv.count(Items.RAW_IRON) == 0,
                 () -> new SmeltTask(bot, "iron", s -> s.is(Items.RAW_IRON)));
-        stage("cook food", () -> inv.count(BeatGameTask::isRawMeat) == 0,
+        stage("cook food", () -> !inOverworld() || inv.count(BeatGameTask::isRawMeat) == 0,
                 () -> new SmeltTask(bot, "food", BeatGameTask::isRawMeat));
-        stage("flint", () -> gear.has(Items.FLINT_AND_STEEL) || inv.has(Items.FLINT),
+        stage("flint", () -> !inOverworld() || gear.has(Items.FLINT_AND_STEEL) || inv.has(Items.FLINT),
                 () -> {
                     MineTask t = new MineTask(bot, "gravel (for flint)", s -> s.is(Blocks.GRAVEL), s -> s.is(Items.FLINT),
                             () -> inv.has(Items.FLINT), true);
                     t.scanRadius = 8;
                     return t;
                 });
-        stage("wood for gear", () -> gear.has(Items.SHIELD) || woodUnits() >= 10, () -> wood(4));
+        stage("wood for gear", () -> !inOverworld() || gear.has(Items.SHIELD) || woodUnits() >= 10, () -> wood(4));
         stage("craft iron gear", () -> nextGear() == null, () -> {
             Ing g = nextGear();
             int have = inv.count(g.pred);
             return new CraftTask(bot).want(g, have + 1);
         });
         stage("equip", () -> !EquipTask.needed(bot), () -> new EquipTask(bot));
+        stage("spare pickaxes for the nether", () -> !inOverworld() || !needNether() || inv.count(ItemTags.PICKAXES) >= 5
+                        || !new CraftTask(bot).want(Ing.STONE_PICK, inv.count(Items.STONE_PICKAXE) + 1).feasible(),
+                () -> new CraftTask(bot).want(Ing.STONE_PICK, inv.count(Items.STONE_PICKAXE) + Math.max(1, 5 - inv.count(ItemTags.PICKAXES))));
         stage("building blocks", () -> inv.countThrowaway() >= 64 || !inOverworld() || !needNether(),
                 () -> stone(inv.count(Ing.COBBLE.pred) + 96));
         stage("water bucket", () -> inv.has(Items.WATER_BUCKET) || !inOverworld() || !needNether(),
                 () -> new FetchFluidTask(bot, false));
         stage("enter the nether", () -> !inOverworld() || !needNether(), () -> new PortalTask(bot));
+        stage("blaze rods", () -> !inNether() || powderPossible() >= EYES_NEEDED,
+                () -> new NetherGatherTask(bot, NetherGatherTask.Kind.BLAZE_RODS, 7));
+        stage("ender pearls", () -> !inNether() || inv.count(Items.ENDER_PEARL) + inv.count(Items.ENDER_EYE) >= EYES_NEEDED,
+                () -> new NetherGatherTask(bot, NetherGatherTask.Kind.PEARLS, 14 - inv.count(Items.ENDER_EYE)));
+        stage("leave the nether", () -> !inNether(), () -> new NetherReturnTask(bot));
+        stage("craft eyes of ender", () -> !inOverworld() || bot.memory.portalFilled
+                        || !new CraftTask(bot).want(Ing.EYE, inv.count(Items.ENDER_EYE) + 1).feasible(),
+                () -> new CraftTask(bot).want(Ing.EYE, inv.count(Items.ENDER_EYE)
+                        + Math.min(inv.count(Items.ENDER_PEARL), inv.count(Items.BLAZE_POWDER) + 2 * inv.count(Items.BLAZE_ROD))));
+        stage("blocks for the End", () -> !inOverworld() || inv.countThrowaway() >= 160,
+                () -> stone(inv.count(Ing.COBBLE.pred) + 128));
+        stage("stronghold", () -> !inOverworld() || bot.memory.dragonDead, () -> new StrongholdTask(bot));
+        stage("ender dragon", () -> bot.level().dimension() != Level.END, () -> new EndTask(bot));
     }
 
     // ---- helpers ------------------------------------------------------------------
@@ -98,7 +118,15 @@ public final class BeatGameTask extends Task {
         return inv.count(Items.ENDER_EYE) + Math.min(powder, inv.count(Items.ENDER_PEARL));
     }
 
-    private boolean needNether() { return eyesPossible() < EYES_NEEDED && !bot.memory.portalFilled; }
+    private int powderPossible() {
+        return bot.inv.count(Items.ENDER_EYE) + bot.inv.count(Items.BLAZE_POWDER) + 2 * bot.inv.count(Items.BLAZE_ROD);
+    }
+
+    private boolean needNether() {
+        if (bot.memory.portalFilled || bot.memory.dragonDead) return false;
+        int needed = bot.memory.framesMissing >= 0 ? bot.memory.framesMissing : EYES_NEEDED;
+        return eyesPossible() < needed;
+    }
 
     private Ing nextGear() {
         var gear = bot.gear;
@@ -203,8 +231,50 @@ public final class BeatGameTask extends Task {
         task = null;
     }
 
+    /** Detects the bot spinning its wheels: nothing gained, nowhere gone, for minutes. */
+    private boolean stalled() {
+        long h = bot.level().dimension().hashCode();
+        BlockPos f = bot.feet();
+        h = h * 31 + (f.getX() >> 3);
+        h = h * 31 + (f.getY() >> 3);
+        h = h * 31 + (f.getZ() >> 3);
+        for (int i = 0; i < 36; i++) {
+            ItemStack s = bot.inv.get(i);
+            h = h * 31 + (s.isEmpty() ? 0 : s.getItem().hashCode() + s.getCount() * 7L + s.getDamageValue());
+        }
+        h = h * 31 + (long) bot.player().getHealth();
+        if (h != stallHash || bot.heartbeat > stallSince) {
+            stallHash = h;
+            stallSince = bot.tick;
+            return false;
+        }
+        return bot.tick - stallSince > 20 * 60 * 4;
+    }
+
+    private long stallHash, stallSince;
+    private Goal unstick;
+    private int unstickTicks;
+
     @Override
     public boolean tick() {
+        if (unstick != null) {
+            bot.setStatus("shaking myself loose");
+            if (++unstickTicks > 600 || bot.nav.goTo(unstick) != Nav.Status.RUNNING) unstick = null;
+            return false;
+        }
+        if (bot.tick % 100 == 0 && stalled()) {
+            bot.say("I seem to be stuck on '" + (current == null ? "?" : current.name) + "'. Trying something else.");
+            if (task != null) task.onInterrupted();
+            task = null;
+            if (!bot.inv.menuIsInventory()) bot.player().closeContainer();
+            bot.nav.reset();
+            BlockPos f = bot.feet();
+            double ang = (bot.tick % 628) / 100.0;
+            unstick = Goal.xz(f.getX() + (int) (Math.cos(ang) * 24), f.getZ() + (int) (Math.sin(ang) * 24), 3);
+            unstickTicks = 0;
+            stallSince = bot.tick;
+            return false;
+        }
         if (task != null) {
             // A more basic need may have reappeared (tool broke, out of food...).
             if (bot.tick % 60 == 0 && task.interruptible()) {
@@ -231,6 +301,6 @@ public final class BeatGameTask extends Task {
             task = s.make.get();
             return false;
         }
-        return true;
+        return bot.memory.dragonDead;
     }
 }

@@ -13,16 +13,16 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class GameRendererTestMixin {
     @Inject(method = "renderLevel", at = @At("HEAD"), cancellable = true)
     private void donutTest$skipLevel(DeltaTracker deltaTracker, CallbackInfo ci) {
-        if (!TestFlags.renderWorld && TestFlags.skipLevel) ci.cancel();
+        if (TestFlags.skipping() && TestFlags.skipLevel) ci.cancel();
     }
 
     @Inject(method = "render", at = @At("HEAD"), cancellable = true)
     private void donutTest$skipRender(DeltaTracker deltaTracker, boolean advanceGameTime, CallbackInfo ci) {
-        if (!TestFlags.renderWorld && TestFlags.skipRender) ci.cancel();
+        if (TestFlags.skipping() && TestFlags.skipRender) ci.cancel();
     }
 
     @Inject(method = "extract", at = @At("HEAD"), cancellable = true)
     private void donutTest$skipExtract(DeltaTracker deltaTracker, boolean advanceGameTime, CallbackInfo ci) {
-        if (!TestFlags.renderWorld && TestFlags.skipExtract) ci.cancel();
+        if (TestFlags.skipping() && TestFlags.skipExtract) ci.cancel();
     }
 }

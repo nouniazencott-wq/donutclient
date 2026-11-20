@@ -33,11 +33,15 @@ public final class Bot {
     public final Aim aim = new Aim(this);
 
     public long tick;
+    /** Tasks that are legitimately waiting (smelting, sheltering) bump this so the stall detector stays quiet. */
+    public long heartbeat;
     private boolean active;
     private Task root;
     private String status = "idle";
     private String lastLogged = "";
     private int respawnCooldown;
+    private int graceTicks;
+    private net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> lastDim;
     private boolean savedPauseOnLostFocus = true;
     public int deaths;
 
@@ -64,6 +68,22 @@ public final class Bot {
 
     public boolean canRun() {
         return mc.player != null && mc.level != null && mc.hasSingleplayerServer() && mc.getSingleplayerServer() != null;
+    }
+
+    /** Test hook: just walk to a goal instead of playing the game. */
+    public String startDebugNav(com.example.donutclient.bot.path.Goal goal) {
+        String err = start();
+        if (err != null) return err;
+        root = new Task(this) {
+            @Override
+            public boolean tick() {
+                setStatus("debug nav to " + goal);
+                var st = nav.goTo(goal);
+                if (st != Nav.Status.RUNNING) dbg("debug nav finished: " + st);
+                return st != Nav.Status.RUNNING;
+            }
+        };
+        return null;
     }
 
     public String start() {
@@ -129,22 +149,38 @@ public final class Bot {
                 memory.deathDim = mc.level.dimension();
                 memory.deathTick = tick;
                 memory.deathsNearby = near;
+                memory.diedRecovering = memory.recovering;
+                memory.recovering = false;
                 say("I died (" + deaths + "). Respawning and carrying on.");
                 p.respawn();
                 mc.gui.setScreen(null);
                 nav.reset();
                 reflex.release();
                 if (root != null) root.onInterrupted();
+                graceTicks = 60; // let the world load around the respawn point
             }
             return;
         }
         respawnCooldown = 0;
+        if (!p.connection.hasClientLoaded()) return; // still on the loading screen
+        if (graceTicks > 0) { graceTicks--; input.clear(); if (p.input != input) p.input = input; return; }
 
+        if (lastDim != mc.level.dimension()) {
+            // Changed dimension: give the chunks a moment to arrive.
+            lastDim = mc.level.dimension();
+            graceTicks = 40;
+            nav.reset();
+            return;
+        }
+        if (memory.netherPortal == null && mc.level.dimension() == net.minecraft.world.level.Level.NETHER) {
+            memory.netherPortal = feet();
+        }
         ClientInput cur = p.input;
         if (cur != input) p.input = input;
         input.clear();
         act.breakingRequested = false;
 
+        if (tick % 20 == 0) inv.dropJunk();
         try {
             if (!reflex.tick() && root != null) {
                 if (root.tick()) {

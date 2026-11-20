@@ -46,6 +46,10 @@ public final class PathExecutor {
 
     private Result fail(String why) {
         failReason = why;
+        if (idx + 1 < path.size()) {
+            bot.dbg("path step failed (" + why + ") " + path.get(idx).toShortString() + " -> " + path.get(idx + 1).toShortString()
+                    + " at " + bot.feet().toShortString());
+        }
         bot.act.stopBreaking();
         return Result.FAILED;
     }
@@ -115,6 +119,7 @@ public final class PathExecutor {
             if ((flags(a) & WATER) != 0 || (flags(b) & WATER) != 0) { bot.input.jump = true; return Result.RUNNING; }
             if (bot.inv.countThrowaway() == 0) return fail("no blocks to pillar");
             if (!centered(a, 0.25) && p.onGround()) { walkTo(a, false); return Result.RUNNING; }
+            if (moveTicks > 120) return fail("pillar stuck");
             if (p.onGround()) bot.input.jump = true;
             if (p.getY() >= a.getY() + 1.0) {
                 bot.act.placeBlock(a);
@@ -145,6 +150,8 @@ public final class PathExecutor {
         }
 
         // ---- move ----
+        if (lavaAround(b, 1, 0)) return fail("lava moved into the path");
+        boolean exposed = lavaAround(b, 1, 5) || lavaAround(a, 1, 5);
         boolean diagonal = dx != 0 && dz != 0;
         boolean sprint = dy == 0 && !inWater && p.getFoodData().getFoodLevel() > 6;
         if (dy < 0 || (idx + 2 < path.size() && path.get(idx + 2).getY() < b.getY())) sprint = false;
@@ -155,6 +162,11 @@ public final class PathExecutor {
             bot.input.jump = true;
         }
         if (diagonal) bot.input.sprint = sprint;
+        if (exposed && dy == 0 && !inWater) {
+            // Edge of a drop into lava: creep, so the bot cannot walk off.
+            bot.input.sprint = false;
+            bot.input.sneak = true;
+        }
         if (checkStuck(p)) {
             return fail("stuck");
         }
@@ -178,6 +190,25 @@ public final class PathExecutor {
         bot.act.faceXZ(pos.getX() + 0.5, pos.getZ() + 0.5);
         bot.input.forward = true;
         bot.input.sprint = sprint;
+    }
+
+    /**
+     * Lava next to the given feet position: at feet/head level when depth is 0,
+     * otherwise also anywhere down to depth blocks below the neighbouring columns.
+     */
+    private boolean lavaAround(BlockPos pos, int r, int depth) {
+        BlockPos.MutableBlockPos m = new BlockPos.MutableBlockPos();
+        for (int dx = -r; dx <= r; dx++) {
+            for (int dz = -r; dz <= r; dz++) {
+                for (int dy = 1; dy >= -depth; dy--) {
+                    m.set(pos.getX() + dx, pos.getY() + dy, pos.getZ() + dz);
+                    BlockState s = bot.level().getBlockState(m);
+                    if (s.getFluidState().is(net.minecraft.tags.FluidTags.LAVA)) return true;
+                    if (dy < 0 && !s.isAir() && s.getFluidState().isEmpty()) break; // solid: nothing below matters
+                }
+            }
+        }
+        return false;
     }
 
     private boolean liquidNextTo(BlockPos c) {

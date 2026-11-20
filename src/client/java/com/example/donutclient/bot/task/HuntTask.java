@@ -26,6 +26,11 @@ public final class HuntTask extends Task {
     private int chaseTicks;
     private int exploreTicks;
     private final DropCollector drops;
+    /** If set, the bot stays around this point and waits there when there is nothing to hunt. */
+    public BlockPos home;
+    public int leash = 48;
+    private int retreat;
+    private Goal retreatGoal;
 
     public HuntTask(Bot bot, String what, Predicate<Entity> prey, Predicate<ItemStack> loot, BooleanSupplier done) {
         super(bot);
@@ -49,6 +54,23 @@ public final class HuntTask extends Task {
     public boolean tick() {
         if (done.getAsBoolean()) { bot.nav.reset(); return true; }
 
+        // Badly hurt: back off and recover before going in again.
+        if (retreat > 0 || bot.player().getHealth() <= 7) {
+            if (retreat == 0) {
+                retreat = 1;
+                BlockPos f = bot.feet();
+                double ax = f.getX(), az = f.getZ();
+                if (target != null) { ax = f.getX() * 2 - target.getX(); az = f.getZ() * 2 - target.getZ(); }
+                double len = Math.max(1, Math.sqrt((ax - f.getX()) * (ax - f.getX()) + (az - f.getZ()) * (az - f.getZ())));
+                retreatGoal = Goal.xz(f.getX() + (int) ((ax - f.getX()) / len * 20), f.getZ() + (int) ((az - f.getZ()) / len * 20), 3);
+            }
+            bot.setStatus("retreating to recover");
+            retreat++;
+            if (bot.player().getHealth() >= 15 || retreat > 900) { retreat = 0; target = null; goal = null; return false; }
+            bot.nav.goTo(retreatGoal);
+            return false;
+        }
+
         if ((target == null || !target.isAlive()) && drops.tick()) {
             bot.setStatus("collecting " + what + " drops");
             return false;
@@ -66,7 +88,14 @@ public final class HuntTask extends Task {
             if (explore == null || ++exploreTicks > 2400) {
                 exploreTicks = 0;
                 if (heading < 0) heading = Math.floorMod(f.getX() * 17 + f.getZ() * 5, 8) * Math.PI / 4;
-                explore = Goal.xz(f.getX() + (int) (Math.cos(heading) * 80), f.getZ() + (int) (Math.sin(heading) * 80), 8);
+                if (home != null) {
+                    // Patrol around home.
+                    heading += 2.2;
+                    int r = leash / 2;
+                    explore = Goal.xz(home.getX() + (int) (Math.cos(heading) * r), home.getZ() + (int) (Math.sin(heading) * r), 4);
+                } else {
+                    explore = Goal.xz(f.getX() + (int) (Math.cos(heading) * 80), f.getZ() + (int) (Math.sin(heading) * 80), 8);
+                }
             }
             Nav.Status st = bot.nav.goTo(explore);
             if (st == Nav.Status.FAILED) heading += Math.PI / 2 + 0.4;
@@ -104,6 +133,7 @@ public final class HuntTask extends Task {
         for (Entity e : bot.level().entitiesForRendering()) {
             if (!(e instanceof LivingEntity le) || !le.isAlive() || le.isBaby() || !prey.test(e)) continue;
             if (bot.memory.dangerous(e.blockPosition())) continue;
+            if (home != null && e.blockPosition().distSqr(home) > (double) leash * leash) continue;
             double d = e.distanceToSqr(bot.player());
             if (d < bestD) { bestD = d; best = le; }
         }

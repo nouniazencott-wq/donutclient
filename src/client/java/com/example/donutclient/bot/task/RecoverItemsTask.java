@@ -21,7 +21,8 @@ public final class RecoverItemsTask extends Task {
     public static boolean pending(Bot bot) {
         var m = bot.memory;
         if (m.deathPos == null) return false;
-        if (m.deathDim != bot.level().dimension() || m.deathsNearby >= 2 || bot.tick - m.deathTick > 20 * 60 * 6) {
+        if (m.deathDim != bot.level().dimension() || m.deathsNearby >= 1 || bot.tick - m.deathTick > 20 * 60 * 6
+                || m.diedRecovering || m.deathPos.distSqr(bot.feet()) > 250 * 250) {
             return false;
         }
         return true;
@@ -30,16 +31,17 @@ public final class RecoverItemsTask extends Task {
     @Override
     public boolean tick() {
         var m = bot.memory;
-        if (!pending(bot) || ++ticks > 20 * 60 * 6) { m.deathPos = null; return true; }
+        if (!pending(bot) || ++ticks > 20 * 60 * 6) { m.deathPos = null; m.recovering = false; return true; }
+        m.recovering = true;
         bot.setStatus("going back for my items at " + m.deathPos.toShortString());
         if (bot.feet().distSqr(m.deathPos) < 8 * 8) {
             if (drops.tick()) { idle = 0; return false; }
-            if (++idle > 60) { m.deathPos = null; return true; }
+            if (++idle > 60) { m.deathPos = null; m.recovering = false; return true; }
             if (bot.feet().distSqr(m.deathPos) < 3 * 3) return false;
         }
         if (goal == null) goal = Goal.near(m.deathPos, 2);
         Nav.Status st = bot.nav.goTo(goal);
-        if (st == Nav.Status.FAILED) { m.deathPos = null; return true; }
+        if (st == Nav.Status.FAILED) { m.deathPos = null; m.recovering = false; return true; }
         return false;
     }
 }

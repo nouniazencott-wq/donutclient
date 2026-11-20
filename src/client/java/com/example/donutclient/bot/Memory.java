@@ -14,11 +14,15 @@ public final class Memory {
     public BlockPos strongholdPortal;
     /** The end portal has been completed (no more eyes needed). */
     public boolean portalFilled;
+    public int framesMissing = -1;
+    public boolean dragonDead;
     /** Where the bot last died and dropped its things (null once dealt with). */
     public BlockPos deathPos;
     public net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> deathDim;
     public long deathTick;
     public int deathsNearby;
+    /** True while walking back for dropped items; dying again then means: let them go. */
+    public boolean recovering, diedRecovering;
 
     /** Places where the bot died; resource gathering steers clear of them. */
     public final List<BlockPos> dangerZones = new ArrayList<>();

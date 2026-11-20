@@ -108,22 +108,91 @@ public final class Inv {
 
     public boolean hold(Item item) { return hold(s -> s.is(item)); }
 
-    public boolean holdThrowaway() { return hold(s -> THROWAWAY.contains(s.getItem()) && s.getItem() instanceof BlockItem); }
+    /** If set (and available) this block is used for building before any other. */
+    public Item preferBlock;
 
-    /** Holds the fastest tool for the block (or a non-tool if tools do not help). */
+    public boolean holdThrowaway() {
+        if (preferBlock != null && count(preferBlock) > 0) return hold(preferBlock);
+        return hold(s -> THROWAWAY.contains(s.getItem()) && s.getItem() instanceof BlockItem);
+    }
+
+    private static boolean keep(ItemStack s) {
+        Item i = s.getItem();
+        if (s.has(DataComponents.TOOL) || s.has(DataComponents.WEAPON) || s.has(DataComponents.FOOD)
+                || s.has(DataComponents.EQUIPPABLE) || s.isDamageableItem()) return true;
+        if (s.is(ItemTags.LOGS) || s.is(ItemTags.PLANKS) || s.is(ItemTags.STONE_TOOL_MATERIALS)) return true;
+        return i == Items.STICK || i == Items.COAL || i == Items.CHARCOAL || i == Items.RAW_IRON || i == Items.IRON_INGOT
+                || i == Items.CRAFTING_TABLE || i == Items.FURNACE || i == Items.BUCKET || i == Items.WATER_BUCKET
+                || i == Items.LAVA_BUCKET || i == Items.FLINT_AND_STEEL || i == Items.FLINT || i == Items.BLAZE_ROD
+                || i == Items.BLAZE_POWDER || i == Items.ENDER_PEARL || i == Items.ENDER_EYE || i == Items.SHIELD
+                || i == Items.OBSIDIAN || i == Items.END_STONE || i == Items.BEEF || i == Items.PORKCHOP
+                || i == Items.MUTTON || i == Items.CHICKEN;
+    }
+
+    /**
+     * Keeps a few slots free by throwing away things the run does not need
+     * (and building blocks beyond a few stacks). One stack per call.
+     */
+    public void dropJunk() {
+        if (!menuIsInventory() || freeSlots() >= 4) return;
+        int victim = -1;
+        for (int i = 9; i < 36 && victim < 0; i++) {
+            ItemStack s = get(i);
+            if (!s.isEmpty() && !keep(s) && !THROWAWAY.contains(s.getItem())) victim = i;
+        }
+        for (int i = 0; i < 9 && victim < 0; i++) {
+            ItemStack s = get(i);
+            if (!s.isEmpty() && !keep(s) && !THROWAWAY.contains(s.getItem())) victim = i;
+        }
+        if (victim < 0 && countThrowaway() > 5 * 64) {
+            // Too many building blocks: shed the least useful kind first.
+            Item[] order = {Items.NETHERRACK, Items.DIRT, Items.GRANITE, Items.DIORITE, Items.ANDESITE, Items.TUFF,
+                    Items.DEEPSLATE, Items.COBBLED_DEEPSLATE, Items.BLACKSTONE, Items.BASALT, Items.COBBLESTONE};
+            for (Item it : order) {
+                if (it == preferBlock) continue;
+                for (int i = 35; i >= 0 && victim < 0; i--) if (get(i).is(it)) victim = i;
+                if (victim >= 0) break;
+            }
+        }
+        if (victim < 0) return;
+        int menuSlot = victim < 9 ? 36 + victim : victim;
+        mc.gameMode.handleContainerInput(p().inventoryMenu.containerId, menuSlot, 1, ContainerInput.THROW, p());
+    }
+
+    private static int toolValue(ItemStack s) {
+        Item i = s.getItem();
+        String n = i.toString();
+        if (n.contains("netherite")) return 6;
+        if (n.contains("diamond")) return 5;
+        if (n.contains("iron")) return 4;
+        if (n.contains("golden")) return 1;
+        if (n.contains("stone")) return 2;
+        if (n.contains("wooden")) return 1;
+        return 3;
+    }
+
+    /** Ticks to break a block of the given hardness with this stack. */
+    private static double breakTicks(BlockState state, float hardness, ItemStack s) {
+        boolean ok = !state.requiresCorrectToolForDrops() || s.isCorrectToolForDrops(state);
+        float sp = Math.max(1f, s.getDestroySpeed(state));
+        return Math.ceil(1.0 / (sp / hardness / (ok ? 30.0 : 100.0)));
+    }
+
+    /** Holds the best tool for the block: fast, but not wasting a precious tool on easy blocks. */
     public void holdBestTool(BlockState state) {
+        float hardness = state.getDestroySpeed(mc.level, net.minecraft.core.BlockPos.ZERO);
+        if (hardness <= 0) return;
         int best = -1;
-        float bestSpeed = 1.0f;
-        boolean needs = state.requiresCorrectToolForDrops();
-        boolean bestOk = false;
+        double bestTicks = breakTicks(state, hardness, ItemStack.EMPTY);
+        int bestValue = 0;
         for (int i = 0; i < 36; i++) {
             ItemStack s = get(i);
-            if (s.isEmpty()) continue;
-            boolean ok = !needs || s.isCorrectToolForDrops(state);
-            float sp = s.getDestroySpeed(state);
-            if (sp <= 1.0f && !(needs && ok)) continue;
-            if ((ok && !bestOk) || (ok == bestOk && sp > bestSpeed)) {
-                best = i; bestSpeed = sp; bestOk = ok;
+            if (s.isEmpty() || !s.has(DataComponents.TOOL)) continue;
+            double t = breakTicks(state, hardness, s);
+            int v = toolValue(s);
+            // Clearly faster wins; when about as fast, use the cheaper tool.
+            if (t < bestTicks - 2 || (t <= bestTicks + 2 && best >= 0 && v < bestValue && t <= bestTicks + 2)) {
+                best = i; bestTicks = Math.min(t, bestTicks); bestValue = v;
             }
         }
         if (best >= 0) { hold(best); return; }

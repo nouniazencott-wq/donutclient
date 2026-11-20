@@ -37,6 +37,10 @@ public class BotGameTest implements FabricClientGameTest {
         TestFlags.skipRender = Boolean.parseBoolean(props.getProperty("skipRender", "true"));
         TestFlags.skipExtract = Boolean.parseBoolean(props.getProperty("skipExtract", "false"));
         TestFlags.skipPresent = Boolean.parseBoolean(props.getProperty("skipPresent", "false"));
+        String late = props.getProperty("late", "");
+        int lateAt = Integer.parseInt(props.getProperty("lateAt", "100"));
+        boolean lateDone = late.isBlank();
+        boolean shots = Boolean.parseBoolean(props.getProperty("shots", "true"));
         boolean start = Boolean.parseBoolean(props.getProperty("start", "true"));
 
         context.runOnClient(mc -> {
@@ -69,7 +73,11 @@ public class BotGameTest implements FabricClientGameTest {
             context.waitTicks(20);
             context.takeScreenshot("start");
             TestFlags.renderWorld = false;
-            if (start) context.runOnClient(mc -> {
+            int navUp = Integer.parseInt(props.getProperty("navUp", "0"));
+            if (navUp != 0) context.runOnClient(mc -> {
+                Bot.I.startDebugNav(com.example.donutclient.bot.path.Goal.block(mc.player.blockPosition().above(navUp)));
+            });
+            else if (start) context.runOnClient(mc -> {
                 String err = Bot.I.start();
                 if (err != null) LOG.error("bot refused to start: {}", err);
             });
@@ -78,6 +86,12 @@ public class BotGameTest implements FabricClientGameTest {
                 int step = Math.min(shotEvery, ticks - elapsed);
                 context.waitTicks(step);
                 elapsed += step;
+                if (!lateDone && elapsed >= lateAt) {
+                    lateDone = true;
+                    for (String cmd : late.split(";")) {
+                        if (!cmd.isBlank()) sp.getServer().runCommand(cmd.trim());
+                    }
+                }
                 final int at = elapsed;
                 boolean active = context.computeOnClient(mc -> {
                     var p = mc.player;
@@ -86,15 +100,17 @@ public class BotGameTest implements FabricClientGameTest {
                         ItemStack st = p.getInventory().getItem(i);
                         if (!st.isEmpty()) items.merge(st.getItem().toString().replace("minecraft:", ""), st.getCount(), Integer::sum);
                     }
-                    LOG.info("t={} deaths={} pos={} dim={} hp={} food={} status=[{}] inv={}", at, Bot.I.deaths, p.blockPosition().toShortString(),
-                            mc.level.dimension().identifier().getPath(), (int) p.getHealth(),
-                            p.getFoodData().getFoodLevel(), Bot.I.status(), items);
+                    LOG.info("t={} deaths={} pos={} dim={} hp={} armor={} food={} use={} block={} status=[{}] inv={}", at, Bot.I.deaths, p.blockPosition().toShortString(),
+                            mc.level.dimension().identifier().getPath(), (int) p.getHealth(), p.getArmorValue(),
+                            p.getFoodData().getFoodLevel(), p.isUsingItem(), p.isBlocking(), Bot.I.status(), items);
                     return Bot.I.isActive();
                 });
-                TestFlags.renderWorld = true;
-                context.waitTicks(2);
-                context.takeScreenshot(String.format("t%06d", elapsed));
-                TestFlags.renderWorld = false;
+                if (shots) {
+                    TestFlags.renderWorld = true;
+                    context.waitTicks(2);
+                    context.takeScreenshot(String.format("t%06d", elapsed));
+                    TestFlags.renderWorld = false;
+                }
                 if (start && !active) break;
             }
             TestFlags.renderWorld = true;

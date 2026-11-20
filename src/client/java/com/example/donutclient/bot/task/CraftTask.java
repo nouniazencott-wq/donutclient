@@ -40,6 +40,7 @@ public final class CraftTask extends Task {
     private boolean finishing;
     private final PickupBlockTask[] pickup = new PickupBlockTask[1];
     public boolean failed;
+    private int totalTicks;
 
     public CraftTask(Bot bot) { super(bot); }
 
@@ -125,6 +126,12 @@ public final class CraftTask extends Task {
     public boolean tick() {
         LocalPlayer p = bot.player();
         if (busy()) return false;
+        if (++totalTicks > 1500 && !finishing) {
+            bot.dbg("craft task timed out");
+            failed = true;
+            finishing = true;
+        }
+        if (totalTicks > 2400) return true;
         if (finishing) return finish();
         if (steps == null) {
             steps = plan();
