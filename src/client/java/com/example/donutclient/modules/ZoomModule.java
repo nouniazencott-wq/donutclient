@@ -6,7 +6,7 @@ import com.example.donutclient.module.ModuleManager;
 import org.lwjgl.glfw.GLFW;
 
 /**
- * OptiFine-style zoom. The actual FOV change happens in GameRendererMixin,
+ * OptiFine-style zoom. The actual FOV change happens in CameraMixin,
  * which asks this module for a multiplier every frame. The module itself is
  * a "hold" toggle: it's on while the key is held, off when released.
  *
@@ -33,7 +33,7 @@ public class ZoomModule extends Module {
         }
     }
 
-    /** Called every frame by GameRendererMixin. */
+    /** Called every frame by CameraMixin. */
     public float fovMultiplier() {
         float target = isEnabled() ? TARGET : 1.0f;
         current += (target - current) * SPEED;

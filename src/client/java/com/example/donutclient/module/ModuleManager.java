@@ -2,6 +2,7 @@ package com.example.donutclient.module;
 
 import com.example.donutclient.DonutClient;
 import com.example.donutclient.hud.HudContext;
+import com.example.donutclient.modules.BotModule;
 import com.example.donutclient.modules.CoordinatesModule;
 import com.example.donutclient.modules.FpsModule;
 import com.example.donutclient.modules.KeystrokesModule;
@@ -41,6 +42,7 @@ public final class ModuleManager {
         register(new CoordinatesModule());
         register(new KeystrokesModule());
         register(new ZoomModule());
+        register(new BotModule());
     }
 
     public void register(Module module) {

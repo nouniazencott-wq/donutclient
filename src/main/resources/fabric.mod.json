@@ -3,7 +3,7 @@
   "id": "donutclient",
   "version": "${version}",
   "name": "Donut Client",
-  "description": "A modular client-side enhancement mod: HUD modules, keybinds, zoom.",
+  "description": "A modular client-side enhancement mod: HUD modules, keybinds, zoom, and a singleplayer-only bot that plays the game by itself.",
   "authors": ["You"],
   "contact": {
     "homepage": "https://example.com/",
