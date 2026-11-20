@@ -48,9 +48,15 @@ public final class EndTask extends Task {
     private int ticks;
     /** Ticks since the current stage / tower attempt started. */
     private int stateTicks;
-    private Goal fleeGoal;
-    private int fleeTicks;
     private Goal waitGoal;
+    /** Fallback goal towards the fountain while its column is not loaded yet. */
+    private Goal fountainGoal;
+    /** Ticks spent hitting the current crystal from the current side. */
+    private int hitTicks;
+    /** Ticks spent in {@link #exit()} since the last replan. */
+    private int exitTicks;
+    /** True while the bot sits out a perch in its burrow to regenerate health. */
+    private boolean recovering;
     /** Coarse ground-level goal used to get near a tower before pillaring up. */
     private Goal approach;
     private Goal inlandGoal;
@@ -116,15 +122,6 @@ public final class EndTask extends Task {
         checkDragonDead();
         LocalPlayer player = bot.player();
 
-        if (fleeTicks > 0) {
-            fleeTicks--;
-            bot.setStatus("dodging dragon breath");
-            if (bot.nav.goTo(fleeGoal) != Nav.Status.RUNNING) {
-                fleeTicks = 0;
-            }
-            return false;
-        }
-
         // Standing in (or just above) a dragon-breath cloud: run straight out of it.
         for (Entity entity : bot.level().entitiesForRendering()) {
             if (!(entity instanceof AreaEffectCloud cloud)) {
@@ -143,9 +140,8 @@ public final class EndTask extends Task {
             if (underCover()) {
                 continue;
             }
-            if (!player.onGround()) {
-                continue;
-            }
+            // (Also while airborne: a hop over an obstacle must not hand control back to the
+            // normal logic in the middle of a cloud.)
             bot.setStatus("dodging dragon breath");
             bot.nav.reset();
             double len = Math.sqrt(dx * dx + dz * dz);
@@ -156,12 +152,20 @@ public final class EndTask extends Task {
                 len = Math.max(1.0, Math.sqrt(dx * dx + dz * dz));
             }
             boolean running = false;
-            // Try straight away from the cloud first, then rotated left/right.
-            for (double angle : new double[] {0.0, 0.8, -0.8, 1.6, -1.6}) {
-                double ux = (dx * Math.cos(angle) - dz * Math.sin(angle)) / len;
-                double uz = (dx * Math.sin(angle) + dz * Math.cos(angle)) / len;
-                if (safeRun(player.getX() + ux * 1.2, player.getZ() + uz * 1.2)
-                        && safeRun(player.getX() + ux * 2.4, player.getZ() + uz * 2.4)) {
+            // Try straight away from the cloud first, then rotated left/right. The first pass only
+            // accepts directions that do not lead into another cloud; the second takes any.
+            for (int pass = 0; pass < 2 && !running; pass++) {
+                for (double angle : new double[] {0.0, 0.8, -0.8, 1.6, -1.6}) {
+                    double ux = (dx * Math.cos(angle) - dz * Math.sin(angle)) / len;
+                    double uz = (dx * Math.sin(angle) + dz * Math.cos(angle)) / len;
+                    if (!safeRun(player.getX() + ux * 1.2, player.getZ() + uz * 1.2)
+                            || !safeRun(player.getX() + ux * 2.4, player.getZ() + uz * 2.4)) {
+                        continue;
+                    }
+                    if (pass == 0 && (inOtherCloud(cloud, player.getX() + ux * 2.4, player.getZ() + uz * 2.4)
+                            || inOtherCloud(cloud, player.getX() + ux * 4.8, player.getZ() + uz * 4.8))) {
+                        continue;
+                    }
                     bot.act.faceXZ(player.getX() + ux * 5.0, player.getZ() + uz * 5.0);
                     bot.input.forward = true;
                     bot.input.sprint = true;
@@ -209,6 +213,13 @@ public final class EndTask extends Task {
             return false;
         }
 
+        if (restock != null && state != S.CRYSTALS) {
+            // The dragon died (or the stage changed) while mining end stone: the blocks are no
+            // longer needed, so do not let the mining hold up the fight or the exit.
+            restock.onInterrupted();
+            restock = null;
+            bot.nav.reset();
+        }
         if (restock != null) {
             if (restock.tick()) {
                 restock = null;
@@ -310,6 +321,17 @@ public final class EndTask extends Task {
             failCrystal();
             return;
         }
+        if (cstate != C.HIT && bot.inv.countThrowaway() < (cstate == C.GOTO ? 8 : 1)) {
+            // Running out of building blocks half-way up: let go of the tower without counting a
+            // failure, so that tick() mines more end stone (it does that only between towers)
+            // instead of the pillar path failing until the tower is given up.
+            tower = null;
+            crystal = null;
+            goal = null;
+            approach = null;
+            bot.nav.reset();
+            return;
+        }
         switch (cstate) {
             case GOTO -> {
                 BlockPos feet = bot.feet();
@@ -381,6 +403,17 @@ public final class EndTask extends Task {
                 if (crystal == null) {
                     return;
                 }
+                if (++hitTicks > 400) {
+                    // 20 seconds of punching without the crystal blowing up (out of reach from
+                    // here?): try the next side, like a failed approach.
+                    dirIdx = (dirIdx + 1) % 4;
+                    if (++tower.fails >= 4) {
+                        tower = null;
+                        return;
+                    }
+                    setupStand();
+                    return;
+                }
                 bot.act.lookAt(crystal.getBoundingBox().getCenter());
                 if (bot.act.attackReady()) {
                     bot.act.attack(crystal);
@@ -389,7 +422,7 @@ public final class EndTask extends Task {
         }
     }
 
-    /** Gives up on the current tower for good (marks it as failed 4 times). */
+    /** Gives up on the current tower for now (marks it as failed 4 times; see the retry in dragon()). */
     private void failCrystal() {
         if (tower != null) {
             tower.fails = 4;
@@ -422,7 +455,9 @@ public final class EndTask extends Task {
         wall0 = top.relative(dir, dist - 1);
         cstate = C.GOTO;
         goal = null;
+        approach = null;
         stateTicks = 0;
+        hitTicks = 0;
     }
 
     private EnderDragon findDragon() {
@@ -459,6 +494,34 @@ public final class EndTask extends Task {
         boolean perched = phase == 5 || phase == 6 || phase == 7 || phase == 3;
         bot.setStatus(perched ? "attacking the perched dragon" : "waiting for the dragon to land");
         if (!perched) {
+            recovering = false;
+            if (stateTicks > 3600 && towers != null && !towers.isEmpty()) {
+                // Crystals that could not be reached earlier keep healing the dragon: every three
+                // minutes give the abandoned towers another try instead of writing them off for good.
+                bot.say("Trying the remaining " + towers.size() + " end crystal(s) again.");
+                for (Tower t : towers) {
+                    t.fails = 0;
+                }
+                state = S.CRYSTALS;
+                stateTicks = 0;
+                tower = null;
+                crystal = null;
+                goal = null;
+                return;
+            }
+            waitNearFountain(dragon);
+            return;
+        }
+        // Badly hurt but fed well enough to regenerate: sit this perch out in the burrow rather
+        // than walking into the dragon's breath and wings (hysteresis: back in at 7 hearts).
+        boolean canRegen = player.getFoodData().getFoodLevel() >= 18;
+        if (player.getHealth() < 8.0F && canRegen) {
+            recovering = true;
+        } else if (player.getHealth() >= 14.0F || !canRegen) {
+            recovering = false;
+        }
+        if (recovering) {
+            bot.setStatus("recovering health before attacking the dragon");
             waitNearFountain(dragon);
             return;
         }
@@ -508,42 +571,21 @@ public final class EndTask extends Task {
         return false;
     }
 
-    /** A goal matching any roofed spot outside all dragon-breath clouds. */
-    private Goal coverGoal() {
-        List<AreaEffectCloud> clouds = new ArrayList<>();
+    /** True if (x, z) at the bot's height lies inside a breath cloud other than {@code current}. */
+    private boolean inOtherCloud(AreaEffectCloud current, double x, double z) {
+        double y = bot.player().getY();
         for (Entity entity : bot.level().entitiesForRendering()) {
-            if (entity instanceof AreaEffectCloud cloud) {
-                clouds.add(cloud);
+            if (!(entity instanceof AreaEffectCloud cloud) || cloud == current) {
+                continue;
             }
-        }
-        return new Goal() {
-            @Override
-            public boolean at(int x, int y, int z) {
-                BlockState roof = bs(new BlockPos(x, y + 2, z));
-                if (roof.isAir() || !roof.getFluidState().isEmpty()) {
-                    return false;
-                }
-                for (AreaEffectCloud cloud : clouds) {
-                    double dx = x + 0.5 - cloud.getX();
-                    double dz = z + 0.5 - cloud.getZ();
-                    double radius = cloud.getRadius() + 2.5;
-                    if (dx * dx + dz * dz < radius * radius && y - cloud.getY() > -1.5 && y - cloud.getY() < 1.5) {
-                        return false;
-                    }
-                }
+            double dx = x - cloud.getX();
+            double dz = z - cloud.getZ();
+            double radius = cloud.getRadius() + 1.0;
+            if (dx * dx + dz * dz < radius * radius && y - cloud.getY() > -1.5 && y - cloud.getY() < 4.0) {
                 return true;
             }
-
-            @Override
-            public double h(int x, int y, int z) {
-                return 0.0;
-            }
-
-            @Override
-            public String toString() {
-                return "cover";
-            }
-        };
+        }
+        return false;
     }
 
     /** True if there is a solid, non-fluid block directly above the bot's head. */
@@ -560,6 +602,17 @@ public final class EndTask extends Task {
             while (y > 30 && bs(probe.set(8, y, 0)).isAir()) {
                 y--;
             }
+            if (y <= 30) {
+                // The fountain column is not loaded (or missing): a goal derived from it would lie
+                // in the void under the island. Just walk towards the fountain and look again.
+                if (fountainGoal == null) {
+                    fountainGoal = Goal.xz(8, 0, 6.0);
+                }
+                if (bot.nav.goTo(fountainGoal) == Nav.Status.FAILED) {
+                    fountainGoal = null;
+                }
+                return;
+            }
             waitGoal = Goal.block(new BlockPos(8, y - 3, 0));
         }
         Nav.Status status = bot.nav.goTo(waitGoal);
@@ -575,6 +628,15 @@ public final class EndTask extends Task {
     /** Finds the exit portal in the fountain and walks into it. */
     private void exit() {
         bot.setStatus("leaving through the exit portal");
+        if (++exitTicks > 600) {
+            // Still in the End after 30 seconds: forget the chosen portal block and every goal,
+            // then look and plan afresh instead of pushing against the same obstacle forever.
+            exitTicks = 0;
+            exitBlock = null;
+            goal = null;
+            waitGoal = null;
+            bot.nav.reset();
+        }
         if (exitBlock == null || !bs(exitBlock).is(Blocks.END_PORTAL)) {
             exitBlock = null;
             if (ticks % 20 == 0) {

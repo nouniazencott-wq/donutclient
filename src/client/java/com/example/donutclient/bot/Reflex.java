@@ -11,6 +11,7 @@ import net.minecraft.core.Direction;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.world.InteractionHand;
+import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.boss.enderdragon.EnderDragon;
@@ -18,6 +19,7 @@ import net.minecraft.world.entity.monster.Creeper;
 import net.minecraft.world.entity.monster.EnderMan;
 import net.minecraft.world.entity.monster.Enemy;
 import net.minecraft.world.entity.monster.zombie.ZombifiedPiglin;
+import net.minecraft.world.food.FoodProperties;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
@@ -117,6 +119,8 @@ public final class Reflex {
     /** Where the bot is sheltering (its feet position when it started), or null. */
     private BlockPos shelterAt;
     private int shelterTicks;
+    /** Ticks since the current shelter was started; unlike {@link #shelterTicks} never held back at night. */
+    private int shelterTotal;
     private int shelterCooldown;
     /** True if the shelter was built to wait out the night rather than to heal. */
     private boolean shelterNight;
@@ -153,13 +157,18 @@ public final class Reflex {
                 return false;
             }
             double limit = overworld ? 9.0 : 13.0;
-            boolean hurt = player.getHealth() <= limit && (nearestHostile(24.0) != null || player.isOnFire());
-            if (!hurt && !nightRisk) {
+            // Only hide to heal when healing is possible at all (food to eat or a full enough food bar);
+            // otherwise the bot would box itself in again and again without ever recovering.
+            boolean hurt = player.getHealth() <= limit && (nearestHostile(24.0) != null || player.isOnFire())
+                    && canHeal();
+            // Do not start a whole night of waiting while starving: nothing in the shelter would fix that.
+            if (!hurt && (!nightRisk || starving())) {
                 return false;
             }
             shelterNight = !hurt;
             shelterAt = bot.feet();
             shelterTicks = 0;
+            shelterTotal = 0;
             release();
             bot.say(hurt ? "Taking cover to heal."
                     : "Night is falling and I have no armour: waiting it out in a shelter.");
@@ -172,6 +181,7 @@ public final class Reflex {
             }
         }
         shelterTicks++;
+        shelterTotal++;
         bot.heartbeat = bot.tick;
         bot.act.stopBreaking();
         bot.nav.reset();
@@ -181,6 +191,16 @@ public final class Reflex {
         if (healed || shelterTicks > 900 || (!bot.feet().equals(shelterAt) && shelterTicks > 40)) {
             shelterAt = null;
             shelterCooldown = 200;
+            release();
+            return false;
+        }
+        // Waiting cannot go on for ever: leave when it can no longer help (nothing left to eat while hurt and
+        // hungry, starving in a night shelter) or when a "night" lasts far longer than a real one (thunderstorm).
+        // The long cooldown keeps the bot from walling itself straight back in.
+        boolean pointless = shelterNight ? starving() : (shelterTicks > 200 && !canHeal());
+        if (pointless || shelterTotal > 13000) {
+            shelterAt = null;
+            shelterCooldown = 2400;
             release();
             return false;
         }
@@ -197,6 +217,13 @@ public final class Reflex {
             if (bot.level().getBlockState(cell).canBeReplaced()) {
                 if (eatTicks > 0) {
                     release();
+                }
+                // A shelter that cannot be closed (out of blocks, or a night shelter still open after 15 seconds)
+                // protects nothing: give it up instead of standing in the open until morning.
+                if (bot.inv.countThrowaway() == 0 || (shelterNight && shelterTotal > 300)) {
+                    shelterAt = null;
+                    shelterCooldown = 1200;
+                    return false;
                 }
                 // Short pause in the building so eating gets a chance even if a cell cannot be closed.
                 if (shelterTicks > 160 && shelterTicks < 170) {
@@ -215,13 +242,103 @@ public final class Reflex {
             }
             return true;
         }
-        if (player.getFoodData().getFoodLevel() < 20) {
-            int slot = bot.inv.find(Reflex::isGoodFood);
-            if (slot >= 0 && bot.inv.hold(slot)) {
-                player.setXRot(-30.0F);
-                mc.options.keyUse.setDown(true);
-                useHeld = true;
-                eatTicks = 1;
+        // A golden apple when close to death (works with a full food bar too), otherwise normal food when hungry.
+        int slot = emergencyAppleSlot();
+        if (slot < 0 && player.getFoodData().getFoodLevel() < 20) {
+            slot = bestFoodSlot();
+        }
+        if (slot >= 0 && bot.inv.hold(slot)) {
+            player.setXRot(-30.0F);
+            mc.options.keyUse.setDown(true);
+            useHeld = true;
+            eatTicks = 1;
+        }
+        return true;
+    }
+
+    /** True if resting can restore health: the food bar is full enough to regenerate, or there is something to eat. */
+    private boolean canHeal() {
+        return bot.player().getFoodData().getFoodLevel() >= 18 || bot.inv.find(Reflex::isGoodFood) >= 0
+                || emergencyAppleSlot() >= 0;
+    }
+
+    /** True if the food bar is nearly empty and the bot carries nothing it would eat. */
+    private boolean starving() {
+        return bot.player().getFoodData().getFoodLevel() <= 6 && bot.inv.find(Reflex::isGoodFood) < 0;
+    }
+
+    /**
+     * Inventory slot of a golden apple to eat right now, or -1. Only when health is at four hearts or less and the
+     * regeneration of a previous apple has worn off, so they are not wasted.
+     */
+    private int emergencyAppleSlot() {
+        LocalPlayer player = bot.player();
+        if (player.getHealth() > 8.0F || player.hasEffect(MobEffects.REGENERATION)) {
+            return -1;
+        }
+        int slot = bot.inv.find(s -> s.is(Items.GOLDEN_APPLE));
+        return slot >= 0 ? slot : bot.inv.find(s -> s.is(Items.ENCHANTED_GOLDEN_APPLE));
+    }
+
+    /**
+     * Inventory slot of the food to eat now, or -1 if there is none: the most filling food that does not overfill
+     * the food bar (so cooked meat is not wasted on a small gap, and is preferred over raw when hungry), or failing
+     * that the least filling one.
+     */
+    private int bestFoodSlot() {
+        int missing = 20 - bot.player().getFoodData().getFoodLevel();
+        int fitSlot = -1;
+        int fitNutrition = -1;
+        int smallSlot = -1;
+        int smallNutrition = Integer.MAX_VALUE;
+        for (int i = 0; i < 36; i++) {
+            ItemStack stack = bot.inv.get(i);
+            if (stack.isEmpty() || !isGoodFood(stack)) {
+                continue;
+            }
+            FoodProperties props = stack.get(DataComponents.FOOD);
+            int nutrition = props == null ? 0 : props.nutrition();
+            if (nutrition <= missing && nutrition > fitNutrition) {
+                fitNutrition = nutrition;
+                fitSlot = i;
+            }
+            if (nutrition < smallNutrition) {
+                smallNutrition = nutrition;
+                smallSlot = i;
+            }
+        }
+        return fitSlot >= 0 ? fitSlot : smallSlot;
+    }
+
+    /**
+     * True if running two blocks in the given horizontal direction (unit vector) is harmless: no lava, fire or
+     * other damaging block in the way or below, and no drop of more than three blocks.
+     */
+    private boolean fleeSafe(double dirX, double dirZ) {
+        LocalPlayer player = bot.player();
+        ClientLevel level = bot.level();
+        for (int step = 1; step <= 2; step++) {
+            BlockPos cell = BlockPos.containing(player.getX() + dirX * step, player.getY() + 0.2,
+                    player.getZ() + dirZ * step);
+            int body = Blocks2.flags(level, cell, level.getBlockState(cell));
+            if ((body & (Blocks2.DANGER | Blocks2.LAVA)) != 0) {
+                return false;
+            }
+            if ((body & (Blocks2.PASS | Blocks2.WATER)) == 0) {
+                // A wall or step: the bot stops or jumps there, it cannot fall.
+                return true;
+            }
+            boolean floor = false;
+            for (int down = 1; down <= 3 && !floor; down++) {
+                BlockPos below = cell.below(down);
+                int f = Blocks2.flags(level, below, level.getBlockState(below));
+                if ((f & (Blocks2.DANGER | Blocks2.LAVA)) != 0) {
+                    return false;
+                }
+                floor = (f & Blocks2.PASS) == 0;
+            }
+            if (!floor) {
+                return false;
             }
         }
         return true;
@@ -274,7 +391,8 @@ public final class Reflex {
 
         // After a water landing: pick the water source back up with the empty bucket.
         if (waterLanding != null) {
-            if (++waterLandingTicks > 100 || bot.inv.count(Items.BUCKET) == 0) {
+            // Never while in lava: scooping water must not keep the lava escape below from running.
+            if (++waterLandingTicks > 100 || bot.inv.count(Items.BUCKET) == 0 || player.isInLava()) {
                 waterLanding = null;
             } else if (player.onGround() || player.isInWater()) {
                 BlockPos src = null;
@@ -328,6 +446,14 @@ public final class Reflex {
                 bot.act.faceXZ(best.getX() + 0.5, best.getZ() + 0.5);
                 bot.input.forward = true;
             }
+            // Empty the water bucket at the bot's feet: it puts out the fire and turns the lava around it to stone.
+            // Only the head pitch changes, so the bot keeps moving towards the spot chosen above.
+            // (Water evaporates in the nether.)
+            if (bot.level().dimension() != Level.NETHER && bot.inv.menuIsInventory()
+                    && bot.inv.count(Items.WATER_BUCKET) > 0 && bot.inv.hold(Items.WATER_BUCKET)) {
+                player.setXRot(90.0F);
+                bot.act.useItem();
+            }
             return true;
         }
 
@@ -344,6 +470,26 @@ public final class Reflex {
                 release();
                 double awayX = player.getX() - creeper.getX();
                 double awayZ = player.getZ() - creeper.getZ();
+                double awayLen = Math.sqrt(awayX * awayX + awayZ * awayZ);
+                if (awayLen < 0.01) {
+                    awayX = 1.0;
+                    awayZ = 0.0;
+                } else {
+                    awayX /= awayLen;
+                    awayZ /= awayLen;
+                }
+                // Do not run off a cliff or into lava: if straight away is unsafe try 45 and 90 degrees to either
+                // side. With no safe direction at all the bot still runs straight away, as the blast is certain.
+                double[] turns = {0.0, Math.PI / 4, -Math.PI / 4, Math.PI / 2, -Math.PI / 2};
+                for (double turn : turns) {
+                    double dirX = awayX * Math.cos(turn) - awayZ * Math.sin(turn);
+                    double dirZ = awayX * Math.sin(turn) + awayZ * Math.cos(turn);
+                    if (fleeSafe(dirX, dirZ)) {
+                        awayX = dirX;
+                        awayZ = dirZ;
+                        break;
+                    }
+                }
                 bot.act.faceXZ(player.getX() + awayX * 4.0, player.getZ() + awayZ * 4.0);
                 bot.input.forward = true;
                 bot.input.sprint = true;
@@ -385,12 +531,21 @@ public final class Reflex {
             bot.nav.reset();
             bot.inv.holdWeapon();
             bot.act.lookAt(threat.getBoundingBox().getCenter());
-            raiseShield();
             double dist = Math.sqrt(threat.getBoundingBox().distanceToSqr(player.getEyePosition()));
             if (dist < 3.0 && bot.act.attackReady()) {
+                // Lower the shield for the hit: a player holding the use key cannot attack, so a permanently
+                // raised shield meant the bot never fought back. It goes up again on the next tick while the
+                // attack recharges.
+                release();
+                if (player.isUsingItem()) {
+                    mc.gameMode.releaseUsingItem(player);
+                }
                 bot.act.attack(threat);
-            } else if (dist > 2.4 && player.onGround() && safeAhead(threat)) {
-                bot.input.forward = true;
+            } else {
+                raiseShield();
+                if (dist > 2.4 && player.onGround() && safeAhead(threat)) {
+                    bot.input.forward = true;
+                }
             }
             if (player.isInWater()) {
                 bot.input.jump = true;
@@ -413,7 +568,14 @@ public final class Reflex {
 
         // Eating.
         int food = player.getFoodData().getFoodLevel();
-        boolean hungry = food <= 12 || (player.getHealth() <= 12.0F && food < 20);
+        // Health only regenerates with the food bar at 18 or more, so when hurt top it up early.
+        boolean hungry = food <= 12 || (player.getHealth() <= 16.0F && food < 18)
+                || (player.getHealth() <= 12.0F && food < 20);
+        // Close to death with a golden apple in the bag: eat it whatever the food bar says.
+        int appleSlot = eatTicks == 0 && threat == null ? emergencyAppleSlot() : -1;
+        // Nearly starving, or about to die: do not wait for monsters that merely lurk nearby (behind a wall, out of
+        // reach) to go away - anything the bot can actually fight is a threat and is handled above.
+        boolean urgent = food <= 6 || appleSlot >= 0;
         if (eatTicks > 0) {
             eatTicks++;
             boolean finished = !player.isUsingItem() && eatTicks > 8;
@@ -423,9 +585,9 @@ public final class Reflex {
             }
             return true;
         }
-        if (hungry && threat == null && (sheltered || nearestHostile(6.0) == null) && bot.inv.menuIsInventory()
-                && !player.isInWater()) {
-            int slot = bot.inv.find(Reflex::isGoodFood);
+        if ((hungry || appleSlot >= 0) && threat == null && (sheltered || urgent || nearestHostile(6.0) == null)
+                && bot.inv.menuIsInventory() && !player.isInWater()) {
+            int slot = appleSlot >= 0 ? appleSlot : bestFoodSlot();
             if (slot >= 0 && bot.inv.hold(slot)) {
                 bot.act.stopBreaking();
                 player.setXRot(-30.0F);

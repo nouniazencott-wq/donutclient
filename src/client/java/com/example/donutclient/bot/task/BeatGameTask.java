@@ -21,6 +21,7 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.animal.chicken.Chicken;
 import net.minecraft.world.entity.animal.cow.AbstractCow;
 import net.minecraft.world.entity.animal.pig.Pig;
+import net.minecraft.world.entity.animal.rabbit.Rabbit;
 import net.minecraft.world.entity.animal.sheep.Sheep;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
@@ -53,6 +54,16 @@ public final class BeatGameTask extends Task {
 	/** While non-null the bot walks to this random nearby goal to get out of a stall. */
 	private Goal unstick;
 	private int unstickTicks;
+	/** Stalls in a row on the same stage; each one makes the recovery walk longer. */
+	private int stallCount;
+	/** The stage the last stall happened on. */
+	private Stage stallStage;
+	/** Direction (radians) and length (blocks) of the current recovery walk, and how often it was re-aimed. */
+	private double unstickAngle;
+	private int unstickDist;
+	private int unstickTries;
+	/** Bot tick of the last "nothing left to do" message. */
+	private long lastIdleSay = -100000L;
 
 	public BeatGameTask(Bot bot) {
 		super(bot);
@@ -89,6 +100,11 @@ public final class BeatGameTask extends Task {
 		stage("fuel", () -> !inOverworld() || fuelUnits() >= smeltables(),
 				() -> ore("coal", s -> s.is(Blocks.COAL_ORE) || s.is(Blocks.DEEPSLATE_COAL_ORE),
 						s -> s.is(Items.COAL), () -> fuelUnits() >= smeltables() + 8));
+		// a furnace needs 8 cobblestone; without them the smelting stages below would restart forever
+		stage("furnace materials",
+				() -> !inOverworld() || smeltables() == 0 || inv.has(Items.FURNACE)
+						|| inv.count(Ing.COBBLE.pred) >= 8,
+				() -> stone(8));
 		stage("smelt iron", () -> !inOverworld() || inv.count(Items.RAW_IRON) == 0,
 				() -> new SmeltTask(bot, "iron", s -> s.is(Items.RAW_IRON)));
 		stage("cook food", () -> !inOverworld() || inv.count(BeatGameTask::isRawMeat) == 0,
@@ -102,6 +118,15 @@ public final class BeatGameTask extends Task {
 		stage("wood for gear", () -> !inOverworld() || gear.has(Items.SHIELD) || woodUnits() >= 10, () -> wood(4));
 		stage("craft iron gear", () -> nextGear() == null, () -> {
 			Ing g = nextGear();
+			if (g == null) {
+				// nothing craftable (any more): a task that ends at once instead of a NullPointerException
+				return new Task(bot) {
+					@Override
+					public boolean tick() {
+						return true;
+					}
+				};
+			}
 			int have = inv.count(g.pred);
 			return new CraftTask(bot).want(g, have + 1);
 		});
@@ -233,7 +258,9 @@ public final class BeatGameTask extends Task {
 	}
 
 	private static boolean isLivestock(Entity e) {
-		return e instanceof AbstractCow || e instanceof Pig || e instanceof Sheep || e instanceof Chicken;
+		// rabbits are often the only animals in deserts and snowy plains
+		return e instanceof AbstractCow || e instanceof Pig || e instanceof Sheep || e instanceof Chicken
+				|| e instanceof Rabbit;
 	}
 
 	private static boolean isRawMeat(ItemStack s) {
@@ -243,7 +270,8 @@ public final class BeatGameTask extends Task {
 
 	private static boolean isMeat(ItemStack s) {
 		return isRawMeat(s) || s.is(Items.COOKED_BEEF) || s.is(Items.COOKED_PORKCHOP) || s.is(Items.COOKED_MUTTON)
-				|| s.is(Items.COOKED_CHICKEN);
+				|| s.is(Items.COOKED_CHICKEN) || s.is(Items.COOKED_RABBIT) || s.is(Items.COOKED_COD)
+				|| s.is(Items.COOKED_SALMON);
 	}
 
 	/** A task that chops the given number of additional logs from real trees on the surface. */
@@ -331,13 +359,40 @@ public final class BeatGameTask extends Task {
 		return bot.tick - stallSince > 4800;
 	}
 
+	/**
+	 * Aims the recovery walk: {@link #unstickDist} blocks along {@link #unstickAngle}, turning in 45 degree steps
+	 * (at most a full circle) away from places the bot died at before.
+	 */
+	private void aimUnstick() {
+		BlockPos f = bot.feet();
+		int x = f.getX();
+		int z = f.getZ();
+		for (int i = 0; i < 8; i++) {
+			x = f.getX() + (int) (Math.cos(unstickAngle) * unstickDist);
+			z = f.getZ() + (int) (Math.sin(unstickAngle) * unstickDist);
+			if (!bot.memory.dangerous(new BlockPos(x, f.getY(), z))) {
+				break;
+			}
+			unstickAngle += Math.PI / 4;
+		}
+		unstick = Goal.xz(x, z, 3.0);
+		unstickTicks = 0;
+	}
+
 	@Override
 	public boolean tick() {
-		// getting out of a stall: wander to a random spot 24 blocks away for at most 30 seconds
+		// getting out of a stall: wander to a spot some distance away (24 blocks the first time, more after
+		// repeated stalls on the same stage) for a limited time
 		if (unstick != null) {
 			bot.setStatus("shaking myself loose");
-			if (++unstickTicks > 600 || bot.nav.goTo(unstick) != Nav.Status.RUNNING) {
+			Nav.Status st = ++unstickTicks > 600 + 10 * unstickDist ? Nav.Status.DONE : bot.nav.goTo(unstick);
+			if (st == Nav.Status.FAILED && ++unstickTries < 4) {
+				// no way in that direction: try another one instead of sitting out the next 4 minutes here
+				unstickAngle += 2.4;
+				aimUnstick();
+			} else if (st != Nav.Status.RUNNING) {
 				unstick = null;
+				bot.nav.reset();
 			}
 			return false;
 		}
@@ -351,11 +406,14 @@ public final class BeatGameTask extends Task {
 				bot.player().closeContainer();
 			}
 			bot.nav.reset();
-			BlockPos f = bot.feet();
+			// escalation: every further stall on the same stage doubles the walk (24, 48, 96 blocks)
+			stallCount = current == stallStage ? stallCount + 1 : 0;
+			stallStage = current;
+			unstickDist = 24 << Math.min(stallCount, 2);
 			// pseudo-random direction derived from the tick counter (0 .. 2*pi)
-			double ang = (bot.tick % 628) / 100.0;
-			unstick = Goal.xz(f.getX() + (int) (Math.cos(ang) * 24.0), f.getZ() + (int) (Math.sin(ang) * 24.0), 3.0);
-			unstickTicks = 0;
+			unstickAngle = (bot.tick % 628) / 100.0;
+			unstickTries = 0;
+			aimUnstick();
 			stallSince = bot.tick;
 			return false;
 		}
@@ -395,6 +453,11 @@ public final class BeatGameTask extends Task {
 			bot.nav.reset();
 			task = s.make.get();
 			return false;
+		}
+		if (!bot.memory.dragonDead && bot.tick - lastIdleSay > 6000) {
+			// should not happen (some stage always applies); say so rather than standing around silently
+			lastIdleSay = bot.tick;
+			bot.say("I have nothing left to do here, but the dragon is still alive.");
 		}
 		return bot.memory.dragonDead;
 	}

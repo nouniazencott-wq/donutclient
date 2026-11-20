@@ -5,16 +5,18 @@ import com.example.donutclient.bot.Locate;
 import com.example.donutclient.bot.path.Goal;
 import com.example.donutclient.bot.path.Nav;
 import java.util.ArrayList;
-import java.util.HashSet;
+import java.util.HashMap;
 import java.util.List;
-import java.util.Set;
+import java.util.Map;
 import java.util.function.BooleanSupplier;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.tags.FluidTags;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.material.FluidState;
 
 /**
  * Finds blocks of a given kind, walks to them, breaks them and collects the drops until a caller-supplied
@@ -35,8 +37,12 @@ public final class MineTask extends Task {
     /** Extra position filter for candidates. */
     public Predicate<BlockPos> where = p -> true;
     private List<BlockPos> candidates = new ArrayList<>();
-    /** Targets that could not be reached or broken. */
-    private final Set<BlockPos> blacklist = new HashSet<>();
+    /** Ticks after which a blacklisted target may be tried again (5 minutes). */
+    private static final long BLACKLIST_TICKS = 6000L;
+    /** Ticks to wait for the locate hint before exploring without it. */
+    private static final int HINT_WAIT_TICKS = 200;
+    /** Targets that could not be reached or broken, with the bot tick at which they were given up. */
+    private final Map<BlockPos, Long> blacklist = new HashMap<>();
     private BlockPos target;
     private Goal goal;
     private long lastScan = -1000L;
@@ -47,6 +53,8 @@ public final class MineTask extends Task {
     public Supplier<Locate.Query> hint;
     private Locate.Query hintQuery;
     private int hintUses;
+    /** Ticks spent waiting for a pending {@link #hintQuery}. */
+    private int hintWait;
     private int exploreTicks;
     private final DropCollector drops;
     private int breakTicks;
@@ -142,7 +150,7 @@ public final class MineTask extends Task {
     /** Blacklists the current target and drops it. */
     private void giveUp() {
         if (target != null) {
-            blacklist.add(target);
+            blacklist.put(target, bot.tick);
         }
         target = null;
         goal = null;
@@ -154,11 +162,12 @@ public final class MineTask extends Task {
      * it from the list, rescanning the world at most every 60 ticks when the list is empty. Null if none.
      */
     private BlockPos pickTarget() {
-        candidates.removeIf(p -> blacklist.contains(p) || !block.test(bot.level().getBlockState(p)));
+        // unsafe() is checked again here: mining a neighbour may have uncovered lava next to a candidate
+        candidates.removeIf(p -> banned(p) || !block.test(bot.level().getBlockState(p)) || unsafe(p));
         if (candidates.isEmpty() && bot.tick - lastScan > 60L) {
             lastScan = bot.tick;
             candidates = bot.scan.find(s -> block.test(s), scanRadius, 64, minY, maxY);
-            candidates.removeIf(p -> blacklist.contains(p) || unsafe(p) || bot.memory.dangerous(p) || !where.test(p));
+            candidates.removeIf(p -> banned(p) || unsafe(p) || bot.memory.dangerous(p) || !where.test(p));
         }
         if (candidates.isEmpty()) {
             return null;
@@ -177,13 +186,34 @@ public final class MineTask extends Task {
         return best;
     }
 
-    /** True if any neighbour except the one below holds a fluid (breaking the block could release it). */
+    /**
+     * True while {@code p} is blacklisted. Entries expire after {@link #BLACKLIST_TICKS}, so a block that was out
+     * of reach once (mob in the way, path budget, ...) is not written off for the rest of the task.
+     */
+    private boolean banned(BlockPos p) {
+        Long since = blacklist.get(p);
+        if (since == null) {
+            return false;
+        }
+        if (bot.tick - since > BLACKLIST_TICKS) {
+            blacklist.remove(p);
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * True if breaking the block could hurt: lava touches it on any side (including below, where the bot would
+     * drop into it after digging the block out), or water lies on top of it (the block is under water). Water
+     * merely next to the block is harmless and no longer rules it out.
+     */
     private boolean unsafe(BlockPos p) {
         for (Direction d : Direction.values()) {
-            if (d == Direction.DOWN) {
+            FluidState fs = bot.level().getBlockState(p.relative(d)).getFluidState();
+            if (fs.isEmpty()) {
                 continue;
             }
-            if (!bot.level().getBlockState(p.relative(d)).getFluidState().isEmpty()) {
+            if (fs.is(FluidTags.LAVA) || d == Direction.UP) {
                 return true;
             }
         }
@@ -195,6 +225,7 @@ public final class MineTask extends Task {
         bot.setStatus("searching for " + what);
         if (hint != null && hintQuery == null) {
             hintQuery = hint.get();
+            hintWait = 0;
         }
         if (exploreGoal == null || ++exploreTicks > 2400) {
             exploreTicks = 0;
@@ -205,7 +236,12 @@ public final class MineTask extends Task {
             } else {
                 // Wait for a pending locate query before wandering off.
                 if (hintQuery != null && !hintQuery.ready()) {
-                    return;
+                    if (++hintWait <= HINT_WAIT_TICKS) {
+                        return;
+                    }
+                    // The query never answered: stop asking and explore blindly instead of idling forever.
+                    hint = null;
+                    hintQuery = null;
                 }
                 if (heading < 0.0) {
                     // One of eight compass directions, derived from the starting position.
