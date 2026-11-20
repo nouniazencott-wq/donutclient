@@ -12,6 +12,8 @@ public final class RecoverItemsTask extends Task {
 	/** Ticks spent at the death spot without anything left to collect. */
 	private int idle;
 	private int ticks;
+	/** How often the way to the death spot could not be found. */
+	private int navFails;
 
 	public RecoverItemsTask(Bot bot) {
 		super(bot);
@@ -64,6 +66,11 @@ public final class RecoverItemsTask extends Task {
 			goal = Goal.near(m.deathPos, 2.0);
 		}
 		Nav.Status st = bot.nav.goTo(goal);
+		if (st == Nav.Status.FAILED && ++navFails < 3) {
+			// one failed path search is not worth losing the whole kit over: try again, aiming less precisely
+			goal = Goal.near(m.deathPos, 2.0 + 2.0 * navFails);
+			return false;
+		}
 		if (st == Nav.Status.FAILED) {
 			m.deathPos = null;
 			m.recovering = false;

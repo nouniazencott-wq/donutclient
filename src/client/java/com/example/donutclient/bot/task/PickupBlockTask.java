@@ -16,6 +16,10 @@ public final class PickupBlockTask extends Task {
 	/** How many of the item the bot carried when the task started; -1 until the first tick. */
 	private int startCount = -1;
 	private Goal goal;
+	/** Ticks since the block is gone during which no dropped item was in sight. */
+	private int lostTicks;
+	/** The cell of the dropped item that {@link #goal} currently leads to; null while the goal is the block. */
+	private BlockPos dropPos;
 
 	public PickupBlockTask(Bot bot, BlockPos pos, Item item) {
 		super(bot);
@@ -49,18 +53,30 @@ public final class PickupBlockTask extends Task {
 			}
 			return false;
 		}
-		// phase 2: walk onto the dropped item
+		// phase 2: walk onto the dropped item (the nearest one, should there be several)
 		ItemEntity drop = null;
+		double best = Double.MAX_VALUE;
 		for (Entity e : bot.level().entitiesForRendering()) {
 			if (e instanceof ItemEntity ie && ie.getItem().is(item) && ie.blockPosition().distSqr(pos) < 36.0) {
-				drop = ie;
+				double d = ie.distanceToSqr(bot.player());
+				if (d < best) {
+					best = d;
+					drop = ie;
+				}
 			}
 		}
 		if (drop == null) {
-			return ticks > 40;
+			// The item shows up a moment after the block breaks, so only give up once it has been missing for
+			// two seconds (counted from now, not from the task start - breaking alone can take longer than that,
+			// and the block used to be left behind then).
+			return ++lostTicks > 40;
 		}
+		lostTicks = 0;
 		BlockPos dp = drop.blockPosition();
-		if (goal == null || !goal.at(dp.getX(), dp.getY(), dp.getZ())) {
+		// (the "reach the block" goal of phase 1 must not be kept here: it can count a drop's cell as reached
+		// while the bot stands too far away to pick the item up)
+		if (goal == null || !dp.equals(dropPos)) {
+			dropPos = dp;
 			goal = Goal.near(dp, 0.5);
 		}
 		if (bot.nav.goTo(goal) == Nav.Status.FAILED) {
