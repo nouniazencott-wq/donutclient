@@ -2,6 +2,7 @@ package com.example.donutclient.bot.task;
 
 import com.example.donutclient.bot.Bot;
 import com.example.donutclient.bot.Ing;
+import com.example.donutclient.bot.path.Goal;
 import java.util.function.Predicate;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.core.BlockPos;
@@ -49,6 +50,8 @@ public final class SmeltTask extends Task {
     private int loaded;
     private PickupBlockTask pickup;
     private boolean triedCraft;
+    /** Path goal for walking back to the furnace when the bot is no longer within reach of it. */
+    private Goal reachGoal;
 
     /**
      * @param what  name shown in the status line
@@ -65,6 +68,11 @@ public final class SmeltTask extends Task {
         super.onInterrupted();
         state = S.PREP;
         furnace = null;
+        reachGoal = null;
+        // Never leave the furnace screen open behind us.
+        if (bot.player() != null) {
+            closeMenu();
+        }
     }
 
     /** Sends one slot click in the currently open container. */
@@ -129,11 +137,22 @@ public final class SmeltTask extends Task {
                 go(S.PLACE);
             }
             case PLACE -> {
-                if (!p.onGround()) {
-                    return false;
-                }
+                // (checked before the on-ground test: a bot floating in water would otherwise wait here forever)
                 if (stateTicks > 200) {
                     return true;
+                }
+                if (bot.inv.count(Items.FURNACE) == 0) {
+                    // The furnace left the inventory, so it was placed after all (confirmed a tick late): use it
+                    // and remember that it is ours.
+                    furnace = findFurnace();
+                    if (furnace != null) {
+                        own = true;
+                        go(S.OPEN_LOAD);
+                    }
+                    return false;
+                }
+                if (!p.onGround()) {
+                    return false;
                 }
                 BlockPos spot = PlaceSpot.find(bot);
                 if (spot == null) {
@@ -158,15 +177,13 @@ public final class SmeltTask extends Task {
                 }
             }
             case OPEN_LOAD -> {
-                if (stateTicks > 200) {
+                if (stateTicks > 400) {
                     closeMenu();
                     go(S.PICKUP);
                     return false;
                 }
                 if (!(p.containerMenu instanceof AbstractFurnaceMenu menu)) {
-                    if (bot.inv.menuIsInventory()) {
-                        bot.act.useOn(furnace, Direction.UP);
-                    }
+                    openFurnace();
                     return false;
                 }
                 // One container action every third tick.
@@ -212,7 +229,8 @@ public final class SmeltTask extends Task {
                         }
                     } else {
                         ItemStack st = menu.getSlot(src).getItem();
-                        int per = bot.level().fuelValues().burnDuration(st);
+                        // (never 0 for the fuels findFuel offers; guarded so a bad value cannot divide by zero)
+                        int per = Math.max(1, bot.level().fuelValues().burnDuration(st));
                         int k = Math.min(st.getCount(), (needTicks - haveTicks + per - 1) / per);
                         // Pick the fuel stack up, right-click k items into the fuel slot, put the rest back.
                         click(src, 0, ContainerInput.PICKUP);
@@ -239,15 +257,13 @@ public final class SmeltTask extends Task {
                 }
             }
             case OPEN_TAKE -> {
-                if (stateTicks > 200) {
+                if (stateTicks > 400) {
                     closeMenu();
                     go(S.PICKUP);
                     return false;
                 }
                 if (!(p.containerMenu instanceof AbstractFurnaceMenu menu)) {
-                    if (bot.inv.menuIsInventory()) {
-                        bot.act.useOn(furnace, Direction.UP);
-                    }
+                    openFurnace();
                     return false;
                 }
                 if (stateTicks % 3 != 0) {
@@ -259,6 +275,8 @@ public final class SmeltTask extends Task {
                 }
                 // Still cooking: keep waiting (and hold the state timeout back).
                 if (!menu.getSlot(0).getItem().isEmpty() && menu.isLit()) {
+                    // (waiting on purpose, like in WAIT: tell the stall watchdog)
+                    bot.heartbeat = bot.tick;
                     stateTicks = Math.min(stateTicks, 100);
                     return false;
                 }
@@ -302,6 +320,30 @@ public final class SmeltTask extends Task {
         return false;
     }
 
+    /**
+     * Works towards an open furnace screen (call while it is not open): closes any other screen, walks back to
+     * the furnace if the bot was driven out of reach (fights and flights happen while it cooks), then clicks it.
+     * Without the walk the furnace timed out, and its contents were lost.
+     */
+    private void openFurnace() {
+        if (!bot.inv.menuIsInventory()) {
+            closeMenu();
+            return;
+        }
+        if (!bot.act.inReach(furnace)) {
+            if (reachGoal == null) {
+                reachGoal = Goal.reach(furnace, 3.5);
+            }
+            bot.nav.goTo(reachGoal);
+            return;
+        }
+        if (reachGoal != null) {
+            reachGoal = null;
+            bot.nav.reset();
+        }
+        bot.act.useOn(furnace, Direction.UP);
+    }
+
     private void closeMenu() {
         LocalPlayer p = bot.player();
         if (!bot.inv.menuIsInventory()) {
@@ -338,7 +380,8 @@ public final class SmeltTask extends Task {
 
     /**
      * Picks an inventory slot to take fuel from. If the fuel slot already holds something only the same item
-     * can be added; otherwise the preference is coal/charcoal, planks, logs, sticks. Returns -1 if none.
+     * can be added; otherwise the preference is coal/charcoal, coal blocks, planks, logs, sticks and finally other
+     * wooden odds and ends (slabs, stairs, saplings). Returns -1 if none.
      */
     private int findFuel(AbstractContainerMenu menu, ItemStack current) {
         if (!current.isEmpty()) {
@@ -347,6 +390,9 @@ public final class SmeltTask extends Task {
         }
         int s = findSlot(menu, st -> st.is(Items.COAL) || st.is(Items.CHARCOAL));
         if (s < 0) {
+            s = findSlot(menu, st -> st.is(Items.COAL_BLOCK));
+        }
+        if (s < 0) {
             s = findSlot(menu, st -> st.is(ItemTags.PLANKS));
         }
         if (s < 0) {
@@ -354,6 +400,10 @@ public final class SmeltTask extends Task {
         }
         if (s < 0) {
             s = findSlot(menu, st -> st.is(Items.STICK));
+        }
+        if (s < 0) {
+            s = findSlot(menu, st -> (st.is(ItemTags.WOODEN_SLABS) || st.is(ItemTags.WOODEN_STAIRS)
+                    || st.is(ItemTags.SAPLINGS)) && bot.level().fuelValues().isFuel(st));
         }
         return s;
     }

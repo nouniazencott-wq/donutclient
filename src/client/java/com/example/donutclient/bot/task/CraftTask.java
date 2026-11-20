@@ -57,6 +57,8 @@ public final class CraftTask extends Task {
     private int countAtLayout;
     /** Ticks spent trying to put our crafting table down. */
     private int placeTicks;
+    /** Where we last tried to put our crafting table down. */
+    private BlockPos placeSpot;
     /** Clicks spent on moving leftovers out of the 2x2 inventory grid during cleanup. */
     private int cleanupClicks;
 
@@ -427,6 +429,11 @@ public final class CraftTask extends Task {
         }
         if (tablePos == null) {
             tablePos = findTable();
+            // A table standing exactly where we just clicked ours down is ours, even if the placement was only
+            // confirmed a tick later: make sure it gets picked up again.
+            if (tablePos != null && tablePos.equals(placeSpot)) {
+                ownTable = true;
+            }
         }
         if (tablePos == null) {
             if (!p.onGround() && !p.isInWater()) {
@@ -454,6 +461,7 @@ public final class CraftTask extends Task {
                 return false;
             }
             if (bot.inv.hold(Items.CRAFTING_TABLE)) {
+                placeSpot = spot;
                 if (bot.act.placeHeld(spot, false)) {
                     tablePos = spot;
                     ownTable = true;
