@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Donut Client</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@500;700&family=Outfit:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap">
+<style>
+/* Layout: one left-aligned column on a deepslate ground; hero pairs the pitch with a real in-game capture,
+   then an ore legend drawn as the outlined boxes the mod draws, then keys and install steps. */
+:root {
+  --bg: #14181d; --panel: #1c2229; --line: #2e3742; --fg: #e6ecf1; --muted: #93a1ae;
+  --accent: #33e5f0; --accent-ink: #062b2e;
+  --display: "Pixelify Sans", "Courier New", monospace;
+  --body: "Outfit", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) {
+  --bg: #eef1f3; --panel: #ffffff; --line: #cfd6dc; --fg: #18202a; --muted: #566472;
+  --accent: #0b7f88; --accent-ink: #ffffff; color-scheme: light } }
+:root[data-theme="light"] {
+  --bg: #eef1f3; --panel: #ffffff; --line: #cfd6dc; --fg: #18202a; --muted: #566472;
+  --accent: #0b7f88; --accent-ink: #ffffff; color-scheme: light }
+
+body { margin: 0; background: var(--bg); color: var(--fg); font: 400 17px/1.6 var(--body); }
+.wrap { max-width: 1040px; margin: 0 auto; padding-block: 28px 56px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: flex; flex-direction: column; gap: 64px; }
+h1, h2 { font-family: var(--display); font-weight: 700; line-height: 1.05; margin: 0; text-wrap: balance; }
+h1 { font-size: clamp(2.6rem, 7vw, 4.4rem); }
+h2 { font-size: 1.7rem; }
+p { margin: 0; max-width: 62ch; }
+.muted { color: var(--muted); }
+a { color: var(--accent); }
+a:focus-visible, .btn:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+
+.top { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; flex-wrap: wrap; }
+.mark { font: 700 1.25rem var(--display); letter-spacing: .02em; }
+.ver { font: 500 .8rem var(--mono); color: var(--muted); }
+
+.hero { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 40px; align-items: center; }
+.hero-copy { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+.hero h1 em { font-style: normal; color: var(--accent); }
+.cta { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; }
+.btn { display: inline-block; background: var(--accent); color: var(--accent-ink); font: 600 1.05rem var(--body);
+  padding: 13px 22px; text-decoration: none; border-radius: 2px; box-shadow: 4px 4px 0 var(--line); }
+.btn:hover { transform: translate(-1px, -1px); box-shadow: 5px 5px 0 var(--line); }
+.cta small { font: 500 .8rem var(--mono); color: var(--muted); }
+figure { margin: 0; min-width: 0; }
+figure img { display: block; width: 100%; height: auto; border: 1px solid var(--line); image-rendering: auto; }
+figcaption { font-size: .85rem; color: var(--muted); margin-top: 8px; }
+
+section { display: flex; flex-direction: column; gap: 22px; }
+.ores { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px 20px; }
+.ores li { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.box { flex: none; width: 26px; height: 26px; border: 2px solid var(--c); background: color-mix(in srgb, var(--c) 19%, transparent); }
+.ores .on { font: 500 .7rem var(--mono); color: var(--muted); letter-spacing: .06em; text-transform: uppercase; }
+.ores span.name { display: flex; flex-direction: column; line-height: 1.2; }
+
+.keys { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; }
+.key { display: flex; gap: 14px; align-items: flex-start; background: var(--panel); border: 1px solid var(--line); padding: 16px; min-width: 0; }
+kbd { flex: none; font: 500 1rem var(--mono); min-width: 2.3em; text-align: center; padding: 5px 8px;
+  border: 1px solid var(--line); border-bottom-width: 3px; background: var(--bg); color: var(--fg); }
+.key b { display: block; font-weight: 600; }
+.key span { color: var(--muted); font-size: .92rem; }
+
+.split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 40px; align-items: start; }
+ol.steps { margin: 0; padding-left: 1.3em; display: flex; flex-direction: column; gap: 12px; max-width: 60ch; }
+code { font: 500 .88em var(--mono); background: var(--panel); border: 1px solid var(--line); padding: 1px 6px; overflow-wrap: anywhere; }
+.note { border-left: 3px solid var(--muted); padding-left: 16px; color: var(--muted); font-size: .95rem; }
+footer { color: var(--muted); font-size: .85rem; border-top: 1px solid var(--line); padding-top: 20px; }
+
+@media (max-width: 760px) { .hero, .split { grid-template-columns: minmax(0, 1fr); } .wrap { gap: 48px; } }
+@media (prefers-reduced-motion: reduce) { .btn:hover { transform: none; } }
+img { max-width: 100%; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <span class="mark">Donut Client</span>
+    <span class="ver">v0.1.0 · Minecraft 26.2 · Fabric</span>
+  </header>
+
+  <div class="hero">
+    <div class="hero-copy">
+      <h1>See the <em>diamonds</em> before you dig.</h1>
+      <p>Donut Client is a small Fabric mod. Its Ore ESP outlines the ores you pick, straight through stone, and draws a line from your crosshair to the nearest veins. The world itself looks normal.</p>
+      <div class="cta">
+        <a class="btn" href="donutclient-0.1.0.jar" download="donutclient-0.1.0.jar">Download the jar</a>
+        <small>donutclient-0.1.0.jar · 35 KB</small>
+      </div>
+    </div>
+    <figure>
+      <img src="ore-esp-test.webp" width="854" height="480" alt="In-game view: cyan, brown, green and gold outlined boxes mark ores buried under grass and behind a stone wall, with lines running to them from the crosshair.">
+      <figcaption>Real capture. The ores are buried under the grass and behind the wall.</figcaption>
+    </figure>
+  </div>
+
+  <section>
+    <h2>Pick your ores</h2>
+    <p class="muted">Each ore gets its own box colour. Diamond and Ancient Debris are on from the start; tick the rest in the picker.</p>
+    <ul class="ores">
+      <li><i class="box" style="--c:#33E5F0"></i><span class="name">Diamond<span class="on">on by default</span></span></li>
+      <li><i class="box" style="--c:#B0603A"></i><span class="name">Ancient Debris<span class="on">on by default</span></span></li>
+      <li><i class="box" style="--c:#2ECC55"></i><span class="name">Emerald</span></li>
+      <li><i class="box" style="--c:#E0B400"></i><span class="name">Gold</span></li>
+      <li><i class="box" style="--c:#C99A7C"></i><span class="name">Iron</span></li>
+      <li><i class="box" style="--c:#FF3030"></i><span class="name">Redstone</span></li>
+      <li><i class="box" style="--c:#3060FF"></i><span class="name">Lapis</span></li>
+      <li><i class="box" style="--c:#E0734D"></i><span class="name">Copper</span></li>
+      <li><i class="box" style="--c:#707070"></i><span class="name">Coal</span></li>
+      <li><i class="box" style="--c:#B8A99A"></i><span class="name">Nether Quartz</span></li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Keys</h2>
+    <div class="keys">
+      <div class="key"><kbd>G</kbd><div><b>Ore ESP on / off</b><span>Boxes, tracers and the ore count.</span></div></div>
+      <div class="key"><kbd>O</kbd><div><b>Open the ore picker</b><span>Choose ores, tracers and range.</span></div></div>
+      <div class="key"><kbd>C</kbd><div><b>Zoom</b><span>Hold to zoom in.</span></div></div>
+      <div class="key"><kbd>K</kbd><div><b>Keystrokes</b><span>Shows WASD and mouse buttons.</span></div></div>
+    </div>
+    <p class="muted">Change any of them in Options → Controls → Key Binds → Donut Client Modules. FPS and coordinates show in the top-left corner.</p>
+  </section>
+
+  <section>
+    <div class="split">
+      <div style="display:flex;flex-direction:column;gap:22px;min-width:0">
+        <h2>Install</h2>
+        <ol class="steps">
+          <li>Install <a href="https://fabricmc.net/use/installer/">Fabric Loader</a> 0.19.5 or newer for Minecraft 26.2. You need Java 25.</li>
+          <li>Download <a href="https://modrinth.com/mod/fabric-api">Fabric API</a> for 26.2.</li>
+          <li>Put both jars in your <code>.minecraft/mods</code> folder.</li>
+          <li>Start the Fabric 26.2 profile, join a world, press <code>G</code>.</li>
+        </ol>
+        <p class="note">Ore ESP only knows about blocks the server has sent you, so servers with anti-xray hide or fake ores. Most multiplayer servers ban mods like this. Check the rules before you use it online.</p>
+      </div>
+      <figure>
+        <img src="ore-esp-settings.webp" width="854" height="480" alt="The Ore ESP picker: a checkbox for each ore, a tracer lines checkbox, a range button and an on/off button.">
+        <figcaption>The picker. Scan range goes from 32 to 128 blocks.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <footer>Donut Client is a fan-made mod, not affiliated with Mojang or Microsoft. Source: <a href="https://github.com/nouniazencott-wq/donutclient">github.com/nouniazencott-wq/donutclient</a></footer>
+</div>
+</body>
+</html>
