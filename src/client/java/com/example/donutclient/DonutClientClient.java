@@ -1,6 +1,12 @@
 package com.example.donutclient;
 
+import com.example.donutclient.bot.Bot;
 import com.example.donutclient.config.ClientConfig;
+import com.example.donutclient.modules.BotModule;
+import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
+import net.fabricmc.fabric.api.client.command.v2.ClientCommands;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
+import net.minecraft.network.chat.Component;
 import com.example.donutclient.hud.HudContext;
 import com.example.donutclient.module.ModuleManager;
 import net.fabricmc.api.ClientModInitializer;
@@ -25,6 +31,24 @@ public class DonutClientClient implements ClientModInitializer {
         ModuleManager manager = ModuleManager.get();
         manager.registerDefaults();
         ClientConfig.load();
+
+        // The bot drives the player at the start of each tick (before movement is applied).
+        ClientTickEvents.START_CLIENT_TICK.register(client -> Bot.I.onTick());
+        ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> Bot.I.stop());
+        ClientCommandRegistrationCallback.EVENT.register((dispatcher, ctx) -> dispatcher.register(
+                ClientCommands.literal("bot")
+                        .then(ClientCommands.literal("start").executes(c -> {
+                            manager.getModule(BotModule.class).setEnabled(true);
+                            return 1;
+                        }))
+                        .then(ClientCommands.literal("stop").executes(c -> {
+                            manager.getModule(BotModule.class).setEnabled(false);
+                            return 1;
+                        }))
+                        .then(ClientCommands.literal("status").executes(c -> {
+                            c.getSource().sendFeedback(Component.literal("[Bot] " + Bot.I.status()));
+                            return 1;
+                        }))));
 
         // Keybinds + module ticks.
         ClientTickEvents.END_CLIENT_TICK.register(manager::onClientTick);

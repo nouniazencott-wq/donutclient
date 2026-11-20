@@ -3,5 +3,6 @@
   "key.donutclient.fps": "Toggle FPS",
   "key.donutclient.coordinates": "Toggle Coordinates",
   "key.donutclient.keystrokes": "Toggle Keystrokes",
-  "key.donutclient.zoom": "Zoom (hold)"
+  "key.donutclient.zoom": "Zoom (hold)",
+  "key.donutclient.auto_beat": "Auto Beat bot (singleplayer)"
 }
