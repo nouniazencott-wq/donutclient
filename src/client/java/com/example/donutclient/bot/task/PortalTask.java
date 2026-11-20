@@ -471,6 +471,15 @@ public final class PortalTask extends Task {
             case 0 -> {
                 if (bot.inv.count(Items.LAVA_BUCKET) == 0) {
                     if (bot.inv.count(Items.BUCKET) == 0) {
+                        if (bot.inv.count(Items.WATER_BUCKET) > 1) {
+                            // Both buckets hold water (cleaning scooped some up). The plan will not craft a third
+                            // bucket, so asking it for one would loop forever: pour one out at our feet instead.
+                            if (bot.inv.hold(Items.WATER_BUCKET)) {
+                                bot.act.lookAt(Vec3.atCenterOf(bot.feet().below()));
+                                bot.act.useItem();
+                            }
+                            return;
+                        }
                         // no bucket to fetch lava with: nothing we can do here. Counting this as a cast failure
                         // would blacklist the pool within 9 ticks, so end the task and let the plan craft one.
                         if (castTicks > 100) needItem("a second bucket");

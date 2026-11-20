@@ -286,7 +286,9 @@ public final class CampTask extends Task {
                     dropWait++;
                     // Leave cover for the loot once the coast is clear, or after 45 s regardless - but
                     // never while badly hurt.
-                    if (!hurt && ((inReach == null && preyNearby == 0 && dropWait > 20) || dropWait > 900)) {
+                    // (After 2 minutes go anyway: without food the bot would never heal and the loot would despawn.)
+                    if ((!hurt || dropWait > 2400)
+                            && ((inReach == null && preyNearby == 0 && dropWait > 20) || dropWait > 900)) {
                         dropWait = 0;
                         lootBefore = bot.inv.count(loot);
                         go(S.COLLECT);
