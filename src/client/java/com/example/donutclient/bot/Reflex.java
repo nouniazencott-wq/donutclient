@@ -272,7 +272,7 @@ public final class Reflex {
             return true;
         }
 
-        // After a water landing: pick the water src back up with the empty bucket.
+        // After a water landing: pick the water source back up with the empty bucket.
         if (waterLanding != null) {
             if (++waterLandingTicks > 100 || bot.inv.count(Items.BUCKET) == 0) {
                 waterLanding = null;

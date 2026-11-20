@@ -241,7 +241,7 @@ public final class Inv {
         if (victim < 0) {
             return;
         }
-        // Inventory-menu victim ids: hotbar 0-8 lives at 36-44, main inventory 9-35 maps one to one.
+        // Inventory-menu slot ids: hotbar 0-8 lives at 36-44, main inventory 9-35 maps one to one.
         int menuSlot = victim < 9 ? 36 + victim : victim;
         mc.gameMode.handleContainerInput(p().inventoryMenu.containerId, menuSlot, 1, ContainerInput.THROW, p());
     }
